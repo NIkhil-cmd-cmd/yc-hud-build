@@ -1,4 +1,4 @@
-"""HUD environment — flight booking task + LLMJudgeGrader."""
+"""HUD v6 browser environment — flight booking eval tasks."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from hud.environment import Environment
 from hud.graders import LLMJudgeGrader, combine
 
 env = Environment(name="openhive-browser")
+# Live OpenHive drives WKWebView directly; CDP capability is for full HUD agent rollouts.
 
 
 class FlightParams(BaseModel):
@@ -17,23 +18,23 @@ class FlightParams(BaseModel):
 
 
 @env.template(id="book_flight")
-async def book_flight(params: FlightParams):
+async def book_flight(origin: str = "SFO", destination: str = "JFK", date: str = "2026-07-15"):
     prompt = (
-        f"Book cheapest one-way flight {params.origin} to {params.destination} "
-        f"on {params.date}. Stop when price is visible on airline checkout."
+        f"Book cheapest one-way flight {origin} to {destination} "
+        f"on {date}. Stop when price is visible on airline checkout."
     )
     answer = yield prompt
     yield await combine(
         LLMJudgeGrader.grade(
             weight=0.25,
             answer=answer,
-            criteria=[f"Flight route matches {params.origin} to {params.destination}"],
+            criteria=[f"Flight route matches {origin} to {destination}"],
             question=prompt,
         ),
         LLMJudgeGrader.grade(
             weight=0.25,
             answer=answer,
-            criteria=[f"Date matches {params.date}"],
+            criteria=[f"Date matches {date}"],
             question=prompt,
         ),
         LLMJudgeGrader.grade(

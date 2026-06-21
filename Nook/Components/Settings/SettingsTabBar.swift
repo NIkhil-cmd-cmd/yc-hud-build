@@ -7,24 +7,32 @@
 import SwiftUI
 
 struct SettingsTabBar: View {
-    @EnvironmentObject var browserManager: BrowserManager
     @Environment(\.nookSettings) var nookSettings
 
     var body: some View {
-        ZStack {
+        HStack(spacing: 0) {
+            Spacer(minLength: 0)
+
+            Text(nookSettings.currentSettingsTab.name)
+                .font(.headline)
+                .foregroundStyle(.primary)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .frame(height: 40)
+        .background {
             BlurEffectView(
                 material: nookSettings.currentMaterial,
                 state: .active
             )
-            HStack {
-                MacButtonsView()
-                    .frame(width: 70, height: 32)
-                Spacer()
-                Text(nookSettings.currentSettingsTab.name)
-                    .font(.headline)
-                Spacer()
-            }
-
+        }
+        .overlay {
+            Rectangle()
+                .fill(.white.opacity(0.06))
+                .frame(height: 1)
+                .frame(maxHeight: .infinity, alignment: .bottom)
         }
         .backgroundDraggable()
     }

@@ -51,6 +51,8 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
     var profileId: UUID?
     // If true, this tab is created to host a popup window; do not perform initial load.
     var isPopupHost: Bool = false
+    /// OpenHive new-tab page (Exa search) — no web load until user navigates.
+    var isOpenHiveNewTab: Bool = false
 
     // Track Option key state for Peek functionality
     var isOptionKeyDown: Bool = false
@@ -746,7 +748,7 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
         // For popup-hosting tabs, don't trigger an initial navigation. WebKit will
         // drive the load into this returned webView from createWebViewWith:.
         // Also don't reload if we're using an existing WebView (from Peek)
-        if !isPopupHost && _existingWebView == nil {
+        if !isPopupHost && !isOpenHiveNewTab && _existingWebView == nil {
             loadURL(url)
         }
     }
@@ -868,6 +870,20 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
     }
 
     func loadURL(_ newURL: URL) {
+        if newURL.host == "about" || newURL.absoluteString.hasPrefix("https://about") || newURL.absoluteString.hasPrefix("http://about") {
+            url = URL(string: "about:blank")!
+            isOpenHiveNewTab = true
+            OpenHiveLogger.log("Tab", "loadURL_blocked_malformed_about", data: ["bad": newURL.absoluteString])
+            return
+        }
+        if newURL.absoluteString.hasPrefix("about:") {
+            url = newURL
+            if isOpenHiveNewTab {
+                OpenHiveLogger.log("Tab", "loadURL_skip_about_newtab")
+                return
+            }
+        }
+
         self.url = newURL
         loadingState = .didStartProvisionalNavigation
 
@@ -3089,12 +3105,22 @@ extension Tab: WKScriptMessageHandler {
 
         case "openhiveObserve":
             Task { @MainActor in
+                guard !EngineBridge.shared.isExecuting else { return }
                 var payload: [String: Any] = [:]
                 if let dict = message.body as? [String: Any] {
                     payload = dict
                 } else if let str = message.body as? String {
                     payload = ["type": "click", "text": str]
                 }
+                OpenHiveLogger.log(
+                    "Tab",
+                    "openhiveObserve",
+                    data: [
+                        "tabId": id.uuidString,
+                        "type": payload["type"] as? String ?? "?",
+                        "url": String(describing: payload["url"]).prefix(80),
+                    ]
+                )
                 if let webView = message.webView {
                     payload["url"] = webView.url?.absoluteString ?? payload["url"] ?? ""
                     payload["title"] = webView.title ?? ""

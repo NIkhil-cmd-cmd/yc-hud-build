@@ -8,6 +8,7 @@ from typing import Any
 import networkx as nx
 
 from embeddings import cosine
+from executor import dedupe_actions
 
 THETA_STATE = 0.88
 
@@ -105,10 +106,16 @@ def compile_workflow_from_buffer(name: str, buffer: list[dict]) -> dict[str, Any
         if "emb" not in node and buffer:
             node["emb"] = node.get("state_emb") or (buffer[0].get("state_emb") if buffer else [])
         nodes[str(n)] = node
+    actions = dedupe_actions([
+        step.get("action", {})
+        for step in buffer
+        if step.get("action", {}).get("type") in {"click", "type", "navigate", "fill", "submit"}
+    ])
     return {
         "id": wid,
         "name": name,
         "policy": policy,
         "nodes": nodes,
+        "actions": actions,
         "steps": len(buffer),
     }

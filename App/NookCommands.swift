@@ -137,7 +137,9 @@ struct NookCommands: Commands {
         // File Section
         CommandGroup(after: .newItem) {
             Button("New Tab") {
-                windowRegistry.activeWindow?.commandPalette?.open()
+                if let windowState = windowRegistry.activeWindow {
+                    browserManager.createNewTab(in: windowState, url: "about:blank")
+                }
             }
             .modifier(dynamicShortcut(.newTab))
             Button("New Window") {

@@ -35,7 +35,9 @@ async def _embed(text: str) -> list[float]:
 
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
-        # Deterministic stub for dev without API key
+        from log_config import log_event, setup_logging
+
+        log_event(setup_logging("openhive.embeddings"), "embed_stub_no_api_key", text_len=len(text))
         h = int(hashlib.sha256(text.encode()).hexdigest()[:8], 16)
         stub = [(h >> (i % 24)) & 0xFF for i in range(1536)]
         _cache[key] = stub

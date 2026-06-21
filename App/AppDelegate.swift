@@ -60,6 +60,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         setupURLEventHandling()
         setupMouseButtonHandling()
         setupSleepWakeHandling()
+        Task { @MainActor in
+            OpenHiveLogger.log("AppDelegate", "applicationDidFinishLaunching")
+            EngineBridge.shared.connect()
+        }
         let didFinishOnboarding = userDefaults.bool(forKey: "settings.didFinishOnboarding")
 
         if let window = NSApplication.shared.windows.first {

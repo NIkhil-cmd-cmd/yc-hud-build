@@ -9,6 +9,20 @@ import Foundation
 import OSLog
 import WebKit
 
+/// JSON-encode a Swift String for safe embedding in JavaScript (JSONSerialization cannot encode bare strings).
+private func jsStringLiteral(_ value: String) -> String {
+    if let data = try? JSONEncoder().encode(value),
+       let str = String(data: data, encoding: .utf8) {
+        return str
+    }
+    let escaped = value
+        .replacingOccurrences(of: "\\", with: "\\\\")
+        .replacingOccurrences(of: "\"", with: "\\\"")
+        .replacingOccurrences(of: "\n", with: "\\n")
+        .replacingOccurrences(of: "\r", with: "\\r")
+    return "\"\(escaped)\""
+}
+
 @MainActor
 class BrowserToolExecutor {
     private static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "Nook", category: "BrowserToolExecutor")
@@ -129,7 +143,7 @@ class BrowserToolExecutor {
 
         let script: String
         if let selector = selector {
-            let selectorJSON = String(data: try JSONSerialization.data(withJSONObject: selector), encoding: .utf8) ?? "\"\""
+            let selectorJSON = jsStringLiteral(selector)
             script = """
             (function() {
                 const el = document.querySelector(\(selectorJSON));
@@ -175,7 +189,7 @@ class BrowserToolExecutor {
 
         // Support clicking by CSS selector OR by visible text
         if let selector = args["selector"] as? String, !selector.isEmpty {
-            let selectorJSON = String(data: try JSONSerialization.data(withJSONObject: selector), encoding: .utf8) ?? "\"\""
+            let selectorJSON = jsStringLiteral(selector)
             let script = """
             (function() {
                 const sel = \(selectorJSON);
@@ -189,7 +203,7 @@ class BrowserToolExecutor {
             let result = try await webView.evaluateJavaScript(script)
             return result as? String ?? "Click executed"
         } else if let text = args["text"] as? String, !text.isEmpty {
-            let textJSON = String(data: try JSONSerialization.data(withJSONObject: text), encoding: .utf8) ?? "\"\""
+            let textJSON = jsStringLiteral(text)
             let script = """
             (function() {
                 const query = \(textJSON).toLowerCase();
@@ -230,7 +244,7 @@ class BrowserToolExecutor {
 
         let filter = args["filter"] as? String ?? ""
         let limit = args["limit"] as? Int ?? 50
-        let filterJSON = String(data: (try? JSONSerialization.data(withJSONObject: filter)) ?? Data("\"\"".utf8), encoding: .utf8) ?? "\"\""
+        let filterJSON = jsStringLiteral(filter)
 
         let script = """
         (function() {
@@ -388,7 +402,7 @@ class BrowserToolExecutor {
             return "No active tab"
         }
 
-        let queryJSON = String(data: (try? JSONSerialization.data(withJSONObject: query)) ?? Data("\"\"".utf8), encoding: .utf8) ?? "\"\""
+        let queryJSON = jsStringLiteral(query)
         let script = """
         (function() {
             const text = document.body.innerText;
@@ -493,5 +507,361 @@ class BrowserToolExecutor {
             return String(describing: result)
         }
         return "JavaScript executed (no return value)"
+    }
+}
+
+// MARK: - OpenHive workflow replay (shared with AI chat browser tools)
+
+extension BrowserToolExecutor {
+    private static let genericSelectors: Set<String> = [
+        "", "button", "#button", "#search", "input", "#input", "#submit", "a",
+        "#search-button-narrow", "#video-title", "#media-container-link", "#thumbnail",
+    ]
+
+    /// Run a recorded OpenHive action on a specific web view (EngineBridge replay path).
+    static func performWorkflowAction(_ action: [String: Any], on webView: WKWebView) async -> (success: Bool, detail: String) {
+        guard let type = action["type"] as? String else {
+            return (false, "Missing action type")
+        }
+
+        switch type {
+        case "navigate":
+            guard let urlString = action["url"] as? String,
+                  !urlString.isEmpty,
+                  urlString != "about:blank",
+                  urlString != "about:newtab",
+                  let url = URL(string: urlString) else {
+                return (true, "Skipped navigate")
+            }
+            if let current = webView.url, current.absoluteString == urlString || current.host == url.host && current.path == url.path {
+                return (true, "Already on page")
+            }
+            webView.load(URLRequest(url: url))
+            return (true, "Navigated to \(urlString)")
+
+        case "click":
+            do {
+                let detail = try await clickElement(args: action, on: webView)
+                let ok = detail.hasPrefix("Clicked")
+                return (ok, detail)
+            } catch {
+                return (false, error.localizedDescription)
+            }
+
+        case "fill", "type":
+            do {
+                let detail = try await typeIntoElement(args: action, on: webView)
+                let ok = detail.hasPrefix("Typed")
+                return (ok, detail)
+            } catch {
+                return (false, error.localizedDescription)
+            }
+
+        default:
+            return (false, "Unknown action type: \(type)")
+        }
+    }
+
+    /// Interactive element snapshot — same selectors as getInteractiveElements tool.
+    static func interactiveElements(from webView: WKWebView, limit: Int = 60) async -> [[String: Any]] {
+        let script = """
+        (function() {
+            const limit = \(limit);
+            const selectors = 'a[href], button, input, select, textarea, [role="button"], [role="link"], [role="menuitem"], [role="searchbox"], [onclick], [tabindex]';
+            const elements = document.querySelectorAll(selectors);
+            const results = [];
+            for (const el of elements) {
+                if (results.length >= limit) break;
+                if (el.offsetParent === null && el.style.display !== 'contents' && !el.closest('label')) continue;
+                const tag = el.tagName.toLowerCase();
+                const type = el.getAttribute('type') || '';
+                const text = (el.textContent || '').trim().substring(0, 80);
+                const value = el.value || '';
+                const ariaLabel = el.getAttribute('aria-label') || '';
+                const placeholder = el.getAttribute('placeholder') || '';
+                const name = el.getAttribute('name') || '';
+                const id = el.id || '';
+                const label = text || ariaLabel || placeholder || value || name;
+                if (!label && tag === 'input' && type === 'hidden') continue;
+                let selector = '';
+                if (id) selector = '#' + CSS.escape(id);
+                else if (name) selector = tag + '[name="' + name.replace(/"/g, '\\\\"') + '"]';
+                else if (ariaLabel) selector = tag + '[aria-label="' + ariaLabel.replace(/"/g, '\\\\"') + '"]';
+                else if (placeholder) selector = tag + '[placeholder="' + placeholder.replace(/"/g, '\\\\"') + '"]';
+                results.push({ tag, text: label.substring(0, 60), role: el.getAttribute('role') || '', name, selector });
+            }
+            return results;
+        })();
+        """
+        do {
+            let result = try await webView.evaluateJavaScript(script)
+            return result as? [[String: Any]] ?? []
+        } catch {
+            return []
+        }
+    }
+
+    private static func clickElement(args: [String: Any], on webView: WKWebView) async throws -> String {
+        let selector = (args["selector"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = (args["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = (args["name"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let genericName = Set(["button", "input", "a"])
+
+        let preferText = !text.isEmpty && (
+            selector.isEmpty
+            || genericSelectors.contains(selector.lowercased())
+            || (text.count >= 3 && !genericName.contains(text.lowercased()))
+        )
+
+        if preferText, let result = try await clickByText(text, on: webView) {
+            return result
+        }
+
+        if !selector.isEmpty, !genericSelectors.contains(selector.lowercased()),
+           let result = try await clickBySelector(selector, textHint: text, on: webView) {
+            return result
+        }
+
+        if !text.isEmpty, text.count > 40, let result = try await clickSearchResult(text, on: webView) {
+            return result
+        }
+
+        if !text.isEmpty, let result = try await clickByText(text, on: webView) {
+            return result
+        }
+
+        if !name.isEmpty, !genericName.contains(name.lowercased()),
+           let result = try await clickByName(name, on: webView) {
+            return result
+        }
+
+        if !selector.isEmpty, let result = try await clickBySelector(selector, textHint: text, on: webView) {
+            return result
+        }
+
+        return "Provide selector, text, or name to click"
+    }
+
+    private static func clickBySelector(_ selector: String, textHint: String = "", on webView: WKWebView) async throws -> String? {
+        let selectorJSON = jsStringLiteral(selector)
+        let hintJSON = jsStringLiteral(textHint.replacingOccurrences(of: "\n", with: " "))
+        let script = """
+        (function() {
+            const sel = \(selectorJSON);
+            const hint = \(hintJSON).replace(/\\s+/g, ' ').trim().toLowerCase();
+            const nodes = document.querySelectorAll(sel);
+            if (!nodes.length) return null;
+            let el = nodes[0];
+            if (hint && nodes.length > 1) {
+                const prefix = hint.slice(0, 50);
+                for (const node of nodes) {
+                    const label = (node.textContent || node.getAttribute('title') || node.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+                    if (label === hint || label.startsWith(prefix) || (prefix.length > 10 && label.includes(prefix.slice(0, 24)))) {
+                        el = node;
+                        break;
+                    }
+                }
+            }
+            el.scrollIntoView({block: 'center'});
+            el.click();
+            return 'Clicked element: ' + (el.textContent || el.getAttribute('title') || '').substring(0, 100).trim();
+        })();
+        """
+        let result = try await webView.evaluateJavaScript(script)
+        return result as? String
+    }
+
+    private static func clickByName(_ name: String, on webView: WKWebView) async throws -> String? {
+        let nameJSON = jsStringLiteral(name)
+        let script = """
+        (function() {
+            const el = document.querySelector('[name="' + \(nameJSON) + '"], #' + CSS.escape(\(nameJSON)));
+            if (!el) return null;
+            el.scrollIntoView({block: 'center'});
+            el.click();
+            return 'Clicked: ' + (el.textContent || el.value || '').substring(0, 100).trim();
+        })();
+        """
+        let result = try await webView.evaluateJavaScript(script)
+        return result as? String
+    }
+
+    private static func clickSearchResult(_ text: String, on webView: WKWebView) async throws -> String? {
+        let textJSON = jsStringLiteral(text.replacingOccurrences(of: "\n", with: " "))
+        let script = """
+        (function() {
+            const raw = \(textJSON).replace(/\\s+/g, ' ').trim();
+            const q = raw.toLowerCase();
+            const prefix = q.slice(0, 50);
+            const pools = [
+                ...document.querySelectorAll('ytd-video-renderer a#video-title'),
+                ...document.querySelectorAll('ytd-video-renderer h3 a'),
+                ...document.querySelectorAll('ytd-item-section-renderer a#video-title'),
+                ...document.querySelectorAll('#contents a[href*="/watch"]'),
+            ];
+            for (const el of pools) {
+                const label = (el.textContent || el.getAttribute('title') || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+                if (!label) continue;
+                if (label === q || label.startsWith(prefix) || (prefix.length > 12 && label.includes(prefix.slice(0, 24)))) {
+                    el.scrollIntoView({block: 'center'});
+                    el.click();
+                    return 'Clicked: ' + (el.textContent || '').replace(/\\s+/g, ' ').trim().substring(0, 100);
+                }
+            }
+            return null;
+        })();
+        """
+        let result = try await webView.evaluateJavaScript(script)
+        return result as? String
+    }
+
+    private static func clickByText(_ text: String, on webView: WKWebView) async throws -> String? {
+        let normalized = text.replacingOccurrences(of: "\n", with: " ")
+        let textJSON = jsStringLiteral(normalized)
+        let script = """
+        (function() {
+            const query = \(textJSON).replace(/\\s+/g, ' ').trim().toLowerCase();
+            if (!query) return null;
+            const prefix = query.slice(0, 48);
+            const candidates = document.querySelectorAll(
+                'a, button, input[type="submit"], input[type="button"], [role="button"], [role="link"], [role="tab"], label, ytd-button-renderer button, tp-yt-paper-button, [onclick], [tabindex]'
+            );
+            let best = null;
+            let bestScore = -1;
+            for (const el of candidates) {
+                if (el.offsetParent === null && el.style.display !== 'contents') continue;
+                const label = (el.textContent || el.value || el.getAttribute('aria-label') || el.getAttribute('title') || '').replace(/\\s+/g, ' ').trim();
+                if (!label) continue;
+                const lower = label.toLowerCase();
+                let score = -1;
+                if (lower === query) score = 100;
+                else if (lower.startsWith(prefix)) score = 80;
+                else if (prefix.length > 10 && lower.includes(prefix.slice(0, 24))) score = 60;
+                else if (lower.includes(query)) score = 40;
+                if (score > bestScore) {
+                    best = el;
+                    bestScore = score;
+                }
+            }
+            if (!best || bestScore < 0) return null;
+            best.scrollIntoView({block: 'center'});
+            best.click();
+            return 'Clicked: ' + (best.textContent || best.value || best.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').substring(0, 100).trim();
+        })();
+        """
+        let result = try await webView.evaluateJavaScript(script)
+        return result as? String
+    }
+
+    private static func isSearchField(selector: String, name: String) -> Bool {
+        let s = selector.lowercased()
+        let n = name.lowercased()
+        return s.contains("search") || n.contains("search") || n == "q"
+            || s.contains("[name=\"q\"]") || s.contains("search_query")
+    }
+
+    private static func submitSearch(on webView: WKWebView) async throws {
+        let script = """
+        (function() {
+            let el = document.activeElement;
+            if (!el || el === document.body) {
+                el = document.querySelector('input[name="search_query"], input[name="q"], input[type="search"], [role="searchbox"]');
+            }
+            if (el) {
+                el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+                el.dispatchEvent(new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+                el.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+                if (el.form) el.form.requestSubmit ? el.form.requestSubmit() : el.form.submit();
+            }
+            const btn = document.querySelector('#search-icon-legacy, button#search, #search-button-narrow, [aria-label="Search"]');
+            if (btn) btn.click();
+            return true;
+        })();
+        """
+        _ = try await webView.evaluateJavaScript(script)
+    }
+
+    private static func typeIntoElement(args: [String: Any], on webView: WKWebView) async throws -> String {
+        let value = (args["value"] as? String ?? args["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return "Empty type value" }
+
+        let selector = (args["selector"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = (args["name"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let pressEnter = (args["submit"] as? Bool) ?? isSearchField(selector: selector, name: name)
+        let selectorJSON = jsStringLiteral(selector)
+        let nameJSON = jsStringLiteral(name)
+
+        let focusScript = """
+        (function() {
+            const sel = \(selectorJSON);
+            const name = \(nameJSON);
+            let el = null;
+            if (sel) el = document.querySelector(sel);
+            if (!el && name) {
+                el = document.querySelector('[name="' + name + '"], #' + CSS.escape(name) + ', [placeholder*="' + name + '"], [aria-label*="' + name + '"]');
+            }
+            if (!el) el = document.activeElement;
+            if (!el || el === document.body) {
+                el = document.querySelector('input[type="search"], input[name="q"], input[name="search_query"], textarea#search-input, ytd-searchbox input, [role="searchbox"], input:not([type="hidden"]), textarea, [contenteditable="true"]');
+            }
+            if (!el) return false;
+            el.scrollIntoView({block: 'center'});
+            el.focus();
+            el.click();
+            if (el.isContentEditable) el.textContent = '';
+            else if ('value' in el) {
+                const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+                    || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+                if (setter) setter.call(el, '');
+                else el.value = '';
+            }
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            return true;
+        })();
+        """
+        let focused = try await webView.evaluateJavaScript(focusScript) as? Bool ?? false
+        guard focused else { return "No input found" }
+
+        for char in value {
+            let charJSON = jsStringLiteral(String(char))
+            let charScript = """
+            (function() {
+                const ch = \(charJSON);
+                let el = document.activeElement;
+                if (!el || el === document.body) {
+                    el = document.querySelector('input[type="search"], input[name="search_query"], input[name="q"], textarea, [role="searchbox"], input:not([type="hidden"])');
+                }
+                if (!el) return false;
+                if (el.isContentEditable) {
+                    el.textContent = (el.textContent || '') + ch;
+                } else if ('value' in el) {
+                    const next = (el.value || '') + ch;
+                    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+                        || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+                    if (setter) setter.call(el, next);
+                    else el.value = next;
+                }
+                el.dispatchEvent(new InputEvent('input', { bubbles: true, data: ch, inputType: 'insertText' }));
+                return true;
+            })();
+            """
+            _ = try await webView.evaluateJavaScript(charScript)
+            try await Task.sleep(nanoseconds: 35_000_000)
+        }
+
+        if pressEnter {
+            try await submitSearch(on: webView)
+        } else {
+            let changeScript = """
+            (function() {
+                const el = document.activeElement;
+                if (el) el.dispatchEvent(new Event('change', { bubbles: true }));
+                return true;
+            })();
+            """
+            _ = try await webView.evaluateJavaScript(changeScript)
+        }
+
+        return "Typed: \(value.prefix(60))"
     }
 }

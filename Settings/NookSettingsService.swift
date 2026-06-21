@@ -359,7 +359,7 @@ class NookSettingsService {
             adBlockerEnabledKey: false,
             debugToggleUpdateNotificationKey: false,
             askBeforeQuitKey: true,
-            sidebarPositionKey: SidebarPosition.left.rawValue,
+            sidebarPositionKey: SidebarPosition.right.rawValue,
             topBarAddressViewKey: false,
 
             geminiApiKeyKey: "",
@@ -453,7 +453,7 @@ class NookSettingsService {
         }
         self.debugToggleUpdateNotification = userDefaults.bool(forKey: debugToggleUpdateNotificationKey)
         self.askBeforeQuit = userDefaults.bool(forKey: askBeforeQuitKey)
-        self.sidebarPosition = SidebarPosition(rawValue: userDefaults.string(forKey: sidebarPositionKey) ?? "left") ?? SidebarPosition.left
+        self.sidebarPosition = SidebarPosition(rawValue: userDefaults.string(forKey: sidebarPositionKey) ?? SidebarPosition.right.rawValue) ?? SidebarPosition.right
         self.topBarAddressView = userDefaults.bool(forKey: topBarAddressViewKey)
         self.geminiApiKey = userDefaults.string(forKey: geminiApiKeyKey) ?? ""
         self.geminiModel = GeminiModel(rawValue: userDefaults.string(forKey: geminiModelKey) ?? GeminiModel.flash.rawValue) ?? .flash

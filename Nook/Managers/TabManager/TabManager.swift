@@ -1273,8 +1273,9 @@ class TabManager: ObservableObject {
 
     @discardableResult
     func createNewTab(
-        url: String = "https://www.google.com",
-        in space: Space? = nil
+        url: String = "about:blank",
+        in space: Space? = nil,
+        openHiveNewTab: Bool = true
     ) -> Tab {
         let settings = nookSettings ?? browserManager?.nookSettings
         let template = settings?.resolvedSearchEngineTemplate ?? SearchProvider.google.queryTemplate
@@ -1315,6 +1316,7 @@ class TabManager: ObservableObject {
             index: 0, // New tabs get index 0 to appear at top
             browserManager: browserManager
         )
+        newTab.isOpenHiveNewTab = openHiveNewTab && validURL.absoluteString.hasPrefix("about:")
         addTab(newTab)
         setActiveTab(newTab)
         return newTab
@@ -2088,8 +2090,8 @@ class TabManager: ObservableObject {
 
     private func toRuntime(_ e: TabEntity) -> Tab {
         // Use the currentURLString for restoration, fallback to urlString for backward compatibility
-        let urlString = e.currentURLString ?? e.urlString
-        let url = URL(string: urlString) ?? URL(string: e.urlString) ?? URL(string: "https://www.google.com")!
+        let urlString = fixBrowserURLString(e.currentURLString ?? e.urlString)
+        let url = URL(string: urlString) ?? URL(string: "about:blank")!
         let t = Tab(
             id: e.id,
             url: url,
@@ -2099,6 +2101,9 @@ class TabManager: ObservableObject {
             index: e.index,
             browserManager: browserManager
         )
+        if urlString.hasPrefix("about:") {
+            t.isOpenHiveNewTab = true
+        }
         t.folderId = e.folderId
         t.isPinned = e.isPinned
         t.isSpacePinned = e.isSpacePinned

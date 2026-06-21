@@ -457,7 +457,9 @@ class KeyboardShortcutManager {
 
             // Tab Management
             case .newTab:
-                self.windowRegistry?.activeWindow?.commandPalette?.open()
+                if let windowState = self.windowRegistry?.activeWindow {
+                    browserManager.createNewTab(in: windowState, url: "about:blank")
+                }
             case .closeTab:
                 browserManager.closeCurrentTab()
             case .undoCloseTab:

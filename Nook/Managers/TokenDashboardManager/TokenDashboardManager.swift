@@ -28,6 +28,7 @@ final class TokenDashboardManager {
     var currentRunTokens = 0
     var currentRunElapsedMs = 0
     var currentRunTier = 1
+    var currentRunReward: Double?
 
     struct RunMetric: Identifiable, Equatable {
         let id = UUID()
@@ -71,15 +72,17 @@ final class TokenDashboardManager {
         }
     }
 
-    func updateLiveRun(tokens: Int, elapsedMs: Int, tier: Int) {
+    func updateLiveRun(tokens: Int, elapsedMs: Int, tier: Int, reward: Double? = nil) {
         currentRunTokens = tokens
         currentRunElapsedMs = elapsedMs
         currentRunTier = tier
+        if let reward { currentRunReward = reward }
     }
 
     func clearLiveRun() {
         currentRunTokens = 0
         currentRunElapsedMs = 0
         currentRunTier = 1
+        currentRunReward = nil
     }
 }

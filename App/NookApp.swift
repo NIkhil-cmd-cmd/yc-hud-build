@@ -59,7 +59,7 @@ struct NookApp: App {
                     .onAppear {
                         setupApplicationLifecycle()
                         setupAIServices()
-                        EngineBridge.shared.connect()
+                        applyOpenHiveLaunchDefaults()
                     }
                 
                 
@@ -105,6 +105,21 @@ struct NookApp: App {
 
         // Start enabled MCP servers
         mcpManager.startEnabledServers(configs: aiConfigService.mcpServers)
+    }
+
+    /// Dia-style layout: right sidebar + AI panel open on first launch.
+    private func applyOpenHiveLaunchDefaults() {
+        let key = "openhive.didApplyLaunchDefaults"
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        UserDefaults.standard.set(true, forKey: key)
+        settingsManager.sidebarPosition = .right
+
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            if let windowState = windowRegistry.activeWindow, settingsManager.showAIAssistant {
+                browserManager.toggleAISidebar(for: windowState)
+            }
+        }
     }
 
     /// Configures application-level dependencies and callbacks when the first window appears.

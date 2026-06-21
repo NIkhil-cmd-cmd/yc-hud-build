@@ -45,10 +45,22 @@ struct SpacesListItem: View {
                 browserManager.setActiveSpace(space, in: windowState)
             }
         } label: {
-            spaceIcon
-                .opacity(isActive ? 1.0 : 0.7)
-                .frame(maxWidth: .infinity)
+            ZStack {
+                if isActive {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(.primary.opacity(colorSchemeAwareSelectionOpacity))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .strokeBorder(.white.opacity(0.06), lineWidth: 1)
+                        }
+                }
 
+                spaceIcon
+                    .opacity(isActive ? 1.0 : 0.75)
+                    .padding(.horizontal, isActive ? 10 : 0)
+                    .padding(.vertical, isActive ? 6 : 0)
+            }
+                .frame(maxWidth: .infinity)
         }
         .labelStyle(.iconOnly)
         .buttonStyle(SpaceListItemButtonStyle())
@@ -103,6 +115,10 @@ struct SpacesListItem: View {
         browserManager.gradientColorManager.isDark
             ? AppColors.spaceTabTextDark
             : AppColors.spaceTabTextLight
+    }
+
+    private var colorSchemeAwareSelectionOpacity: Double {
+        browserManager.gradientColorManager.isDark ? 0.16 : 0.1
     }
 
     // MARK: - Context Menu

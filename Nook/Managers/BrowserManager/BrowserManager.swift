@@ -928,7 +928,7 @@ class BrowserManager: ObservableObject {
     }
 
     /// Create a new tab and set it as active in the specified window
-    func createNewTab(in windowState: BrowserWindowState, url: String = "https://www.google.com") {
+    func createNewTab(in windowState: BrowserWindowState, url: String = "about:blank") {
         // Handle incognito windows - create ephemeral tabs
         if windowState.isIncognito, let profile = windowState.ephemeralProfile {
             let template = nookSettings?.resolvedSearchEngineTemplate ?? SearchProvider.google.queryTemplate
@@ -951,7 +951,7 @@ class BrowserManager: ObservableObject {
             ?? windowState.currentProfileId.flatMap { pid in
                 tabManager.spaces.first(where: { $0.profileId == pid })
             }
-        let newTab = tabManager.createNewTab(url: url, in: targetSpace)
+        let newTab = tabManager.createNewTab(url: url, in: targetSpace, openHiveNewTab: url == "about:blank")
         selectTab(newTab, in: windowState)
     }
 

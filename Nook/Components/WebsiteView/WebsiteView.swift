@@ -266,6 +266,14 @@ struct WebsiteView: View {
                         value: splitManager.getSplitState(for: windowState.id).isPreviewActive
                     )
             }
+
+            if let tab = browserManager.currentTab(for: windowState), tab.isOpenHiveNewTab {
+                OpenHiveNewTabView()
+                    .environmentObject(browserManager)
+                    .environment(windowState)
+                    .clipShape(webViewClipShape)
+                    .zIndex(5000)
+            }
             
         }
     }

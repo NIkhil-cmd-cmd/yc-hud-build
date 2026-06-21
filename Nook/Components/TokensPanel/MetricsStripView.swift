@@ -10,8 +10,11 @@ struct MetricsStripView: View {
     @Bindable var engine = EngineBridge.shared
 
     var body: some View {
-        if engine.isExecuting || tokens.currentRunElapsedMs > 0 {
+        if engine.isExecuting || tokens.currentRunElapsedMs > 0 || engine.hudReward != nil {
             HStack(spacing: 12) {
+                if let reward = engine.hudReward ?? tokens.currentRunReward {
+                    hudBadge(reward)
+                }
                 Text("\(tokens.currentRunTokens) tokens")
                 Text(formatMs(tokens.currentRunElapsedMs))
                 tierBadge(tokens.currentRunTier)
@@ -21,6 +24,14 @@ struct MetricsStripView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
         }
+    }
+
+    private func hudBadge(_ reward: Double) -> some View {
+        let pct = Int(reward * 100)
+        let color: Color = reward >= 0.75 ? .green : (reward >= 0.5 ? .orange : .red)
+        return Text("HUD \(pct)%")
+            .font(.system(.caption2, design: .monospaced).weight(.bold))
+            .foregroundStyle(color)
     }
 
     private func tierBadge(_ tier: Int) -> some View {

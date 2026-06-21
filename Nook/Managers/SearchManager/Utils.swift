@@ -28,8 +28,24 @@ private func hostPortion(_ input: String) -> String {
   return beforeQuery
 }
 
-public func normalizeURL(_ input: String, queryTemplate: String) -> String {
+public func fixBrowserURLString(_ input: String) -> String {
   let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+  if trimmed.isEmpty { return "about:blank" }
+  if trimmed.hasPrefix("about:") { return trimmed }
+  // WKWebView shows "hostname could not be found" for these malformed URLs
+  if trimmed.hasPrefix("https://about") || trimmed.hasPrefix("http://about") {
+    return "about:blank"
+  }
+  return trimmed
+}
+
+public func normalizeURL(_ input: String, queryTemplate: String) -> String {
+  let trimmed = fixBrowserURLString(input)
+
+  // about: / data: / blob: schemes
+  if trimmed.hasPrefix("about:") || trimmed.hasPrefix("data:") || trimmed.hasPrefix("blob:") {
+    return trimmed
+  }
 
   // Explicit scheme — respect it as-is (including http://)
   if trimmed.hasPrefix("http://") || trimmed.hasPrefix("https://") ||

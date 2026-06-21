@@ -393,6 +393,12 @@ struct WindowView: View {
                     .allowsHitTesting(false)
             }
         }
+        .overlay(alignment: .topTrailing) {
+            OpenHiveStatusHUD()
+                .environment(windowState)
+                .environmentObject(browserManager)
+                .zIndex(9000)
+        }
         .padding(.bottom, 8)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

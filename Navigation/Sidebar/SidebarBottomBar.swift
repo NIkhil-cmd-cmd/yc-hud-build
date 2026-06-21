@@ -33,7 +33,18 @@ struct SidebarBottomBar: View {
             if !windowState.isIncognito {
                 newSpaceButton
             }
-        }.fixedSize(horizontal: false, vertical: true)
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(.ultraThinMaterial)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(.white.opacity(0.08), lineWidth: 1)
+        }
         .padding(.horizontal, 8)
     }
     
@@ -56,7 +67,7 @@ struct SidebarBottomBar: View {
     }
     
     private var newSpaceButton: some View {
-        Menu{
+        Menu {
             Button("New Space", systemImage: "square.grid.2x2") {
                 onNewSpaceTap()
             }
@@ -72,7 +83,7 @@ struct SidebarBottomBar: View {
             Button("New Profile", systemImage: "person.badge.plus") {
                 // TODO: Show profile creation dialog
             }
-        } label:{
+        } label: {
             Label("Actions", systemImage: "plus")
                 .labelStyle(.iconOnly)
         }

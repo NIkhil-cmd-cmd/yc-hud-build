@@ -13,8 +13,10 @@ struct ContentView: View {
     @EnvironmentObject var browserManager: BrowserManager
     @EnvironmentObject var tabManager: TabManager
     @Environment(WindowRegistry.self) private var windowRegistry
+    @Environment(\.nookSettings) private var settingsManager
     @State private var defaultWindowState = BrowserWindowState()
     @State private var commandPalette = CommandPalette()
+    private static var didOpenAISidebarThisSession = false
     
     private let providedWindowState: BrowserWindowState?
     
@@ -40,6 +42,12 @@ struct ContentView: View {
                 windowState.commandPalette = commandPalette
                 // Register this window state with the registry
                 windowRegistry.register(windowState)
+                if settingsManager.showAIAssistant,
+                   !Self.didOpenAISidebarThisSession,
+                   !windowState.isSidebarAIChatVisible {
+                    Self.didOpenAISidebarThisSession = true
+                    windowState.isSidebarAIChatVisible = true
+                }
             }
             .onDisappear {
                 // Unregister this window state when the window closes
