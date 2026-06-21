@@ -32,6 +32,13 @@ class WorkflowMatch:
     reason: str
 
 
+@dataclass(frozen=True)
+class WorkflowRelevance:
+    applicable: bool
+    params: dict[str, str]
+    reason: str
+
+
 def parse_planner_json(text: str, *, max_chars: int = MAX_PLANNER_CHARS) -> dict[str, Any]:
     """Parse and validate strict ultraplan JSON."""
     if not text or not text.strip():
@@ -89,7 +96,7 @@ def heuristic_plan(goal: str) -> dict[str, Any]:
                 "title": "Find flights",
                 "goal": f"Find flight options for: {goal}. Stop when results/options are visible.",
                 "domain": "travel.flights",
-                "requiredInputs": ["origin", "dates", "travelers"],
+                "requiredInputs": ["origin", "destination", "dates", "travelers"],
                 "safety": "stop_before_purchase",
             }
         )
@@ -255,6 +262,216 @@ def missing_required_inputs(subtask: dict[str, Any], goal: str, context: dict[st
     return missing
 
 
+def workflow_relevance_for_subtask(
+    subtask: dict[str, Any],
+    workflow: dict[str, Any],
+    root_goal: str,
+) -> WorkflowRelevance:
+    """Validate a matched workflow against the concrete subtask before replay."""
+    params = extract_workflow_params(subtask, root_goal, workflow)
+    schema = workflow_input_schema(workflow, subtask)
+    missing = [field for field in schema if field not in params]
+    if missing:
+        return WorkflowRelevance(False, params, f"missing workflow inputs: {', '.join(missing)}")
+
+    conflict = first_literal_conflict(workflow, params, f"{root_goal} {subtask.get('goal', '')}")
+    if conflict:
+        return WorkflowRelevance(False, params, conflict)
+
+    return WorkflowRelevance(True, params, "matched")
+
+
+def workflow_input_schema(workflow: dict[str, Any], subtask: dict[str, Any]) -> list[str]:
+    meta = workflow.get("metadata") if isinstance(workflow.get("metadata"), dict) else {}
+    raw_schema = meta.get("inputSchema") or meta.get("inputs") or []
+    schema = [canonical_input_name(str(v)) for v in raw_schema if str(v).strip()]
+    schema = [v for v in schema if v]
+    if schema:
+        return _dedupe(schema)
+    if str(subtask.get("domain") or "").lower() == "travel.flights":
+        return ["origin", "destination", "departDate"]
+    return []
+
+
+def canonical_input_name(name: str) -> str:
+    key = re.sub(r"[^a-z0-9]", "", name.lower())
+    aliases = {
+        "from": "origin",
+        "origin": "origin",
+        "departureairport": "origin",
+        "to": "destination",
+        "dest": "destination",
+        "destination": "destination",
+        "arrivalairport": "destination",
+        "date": "departDate",
+        "dates": "departDate",
+        "departdate": "departDate",
+        "departuredate": "departDate",
+        "traveler": "travelers",
+        "travelers": "travelers",
+        "passengers": "travelers",
+    }
+    return aliases.get(key, name)
+
+
+def extract_workflow_params(
+    subtask: dict[str, Any],
+    root_goal: str = "",
+    workflow: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    text = f"{root_goal} {subtask.get('title', '')} {subtask.get('goal', '')}"
+    params = _extract_explicit_params(text)
+
+    if "origin" not in params:
+        origin = _extract_place_after(text, ("from", "leaving from", "departing from", "origin"))
+        if origin:
+            params["origin"] = _normalize_place(origin)
+    if "destination" not in params:
+        destination = _extract_place_after(text, ("to", "for", "destination"))
+        normalized = _normalize_place(destination) if destination else ""
+        if normalized and normalized.lower() not in {"italy", "europe"}:
+            params["destination"] = normalized
+
+    if "departDate" not in params:
+        date = _extract_date(text)
+        if date:
+            params["departDate"] = date
+    if "travelers" not in params:
+        travelers = _extract_travelers(text)
+        if travelers:
+            params["travelers"] = travelers
+
+    schema = workflow_input_schema(workflow or {}, subtask)
+    return {k: v for k, v in params.items() if not schema or k in schema or k == "travelers"}
+
+
+def _extract_explicit_params(text: str) -> dict[str, str]:
+    params: dict[str, str] = {}
+    for key in ("origin", "destination", "departDate", "depart_date", "travelers"):
+        m = re.search(rf"\b{key}\s*[:=]\s*([A-Za-z0-9 /,-]+)", text, re.IGNORECASE)
+        if m:
+            params[canonical_input_name(key)] = m.group(1).strip(" .,")
+    return params
+
+
+def _extract_place_after(text: str, markers: tuple[str, ...]) -> str:
+    stop = r"(?=\s+(?:to|on|departing|leaving|returning|for\s+\d|with|and|then)|[,\.]|$)"
+    for marker in markers:
+        pattern = rf"\b{re.escape(marker)}\s+([A-Za-z][A-Za-z .'-]*?){stop}"
+        m = re.search(pattern, text, re.IGNORECASE)
+        if m:
+            return m.group(1).strip(" .,")
+    return ""
+
+
+def _normalize_place(place: str) -> str:
+    raw = place.strip(" .,")
+    lower = raw.lower()
+    aliases = {
+        "la": "Los Angeles",
+        "lax": "LAX",
+        "sf": "San Francisco",
+        "sfo": "SFO",
+        "nyc": "NYC",
+        "rome": "Rome",
+        "rom": "Rome",
+        "milan": "Milan",
+        "venice": "Venice",
+        "florence": "Florence",
+        "italy": "Italy",
+    }
+    if re.fullmatch(r"[A-Za-z]{3}", raw):
+        return raw.upper()
+    return aliases.get(lower, raw)
+
+
+def _extract_date(text: str) -> str:
+    iso = re.search(r"\b\d{4}-\d{2}-\d{2}\b", text)
+    if iso:
+        return iso.group(0)
+    month = re.search(
+        r"\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(?:,\s*\d{4})?",
+        text,
+        re.IGNORECASE,
+    )
+    if month:
+        return month.group(0)
+    return ""
+
+
+def _extract_travelers(text: str) -> str:
+    m = re.search(r"\b(\d+)\s+(?:traveler|travelers|passenger|passengers|adult|adults|people|person)\b", text, re.IGNORECASE)
+    return m.group(1) if m else ""
+
+
+def first_literal_conflict(workflow: dict[str, Any], params: dict[str, str], task_text: str) -> str | None:
+    """Catch replay actions that would type/navigate toward a different concrete task."""
+    expected = _geo_tokens(" ".join([task_text, *params.values()]))
+    if not expected:
+        return None
+    for action in _workflow_actions(workflow):
+        if (action.get("type") or "").lower() not in {"type", "fill", "navigate"}:
+            continue
+        literal = " ".join(str(action.get(k) or "") for k in ("value", "text", "name", "url"))
+        if "{" in literal and "}" in literal:
+            continue
+        actual = _geo_tokens(literal)
+        conflict = actual - expected
+        if conflict:
+            return f"workflow literal conflicts with task: {', '.join(sorted(conflict))}"
+    return None
+
+
+def _workflow_actions(workflow: dict[str, Any]) -> list[dict[str, Any]]:
+    actions = workflow.get("actions")
+    if isinstance(actions, list):
+        return [a for a in actions if isinstance(a, dict)]
+    policy = workflow.get("policy")
+    if isinstance(policy, dict):
+        out = []
+        for entry in policy.values():
+            if isinstance(entry, dict) and isinstance(entry.get("action"), dict):
+                out.append(entry["action"])
+        return out
+    return []
+
+
+def _geo_tokens(text: str) -> set[str]:
+    lower = text.lower()
+    known = {
+        "lax": "los_angeles",
+        "los angeles": "los_angeles",
+        "la": "los_angeles",
+        "sfo": "san_francisco",
+        "san francisco": "san_francisco",
+        "nyc": "new_york",
+        "new york": "new_york",
+        "jfk": "new_york",
+        "rome": "rome",
+        "fco": "rome",
+        "milan": "milan",
+        "mxp": "milan",
+        "venice": "venice",
+        "vce": "venice",
+        "florence": "florence",
+        "flr": "florence",
+        "italy": "italy",
+    }
+    found: set[str] = set()
+    for needle, canonical in known.items():
+        if re.search(rf"(?<![a-z0-9]){re.escape(needle)}(?![a-z0-9])", lower):
+            found.add(canonical)
+    return found
+
+
+def _dedupe(values: list[str]) -> list[str]:
+    out = []
+    for value in values:
+        if value not in out:
+            out.append(value)
+    return out
+
+
 def _action_is_irreversible(action: dict[str, Any]) -> bool:
     return bool(IRREVERSIBLE_RE.search(json.dumps(action, default=str)))
 
@@ -266,9 +483,10 @@ class UltraPlanSession(AgentTaskSession):
         workflow: dict[str, Any],
         *,
         max_steps: int,
+        params: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         self._running = True
-        executor = PolicyExecutor(workflow, _extract_params(subtask))
+        executor = PolicyExecutor(workflow, params or extract_workflow_params(subtask, workflow=workflow))
         try:
             try:
                 state = await self._wait_state(timeout=6)
@@ -308,16 +526,6 @@ class UltraPlanSession(AgentTaskSession):
             return {"success": False, "steps": max_steps, "reason": "max_steps"}
         finally:
             self._running = False
-
-
-def _extract_params(subtask: dict[str, Any]) -> dict[str, str]:
-    params: dict[str, str] = {}
-    text = f"{subtask.get('title', '')} {subtask.get('goal', '')}"
-    for key in ("origin", "destination", "departDate", "depart_date"):
-        m = re.search(rf"{key}\s*[:=]\s*([A-Za-z0-9-]+)", text)
-        if m:
-            params[key] = m.group(1)
-    return params
 
 
 async def _run_agent_subtask(
@@ -406,8 +614,37 @@ async def run_ultraplan(
         log_event(log, "subtask_start", subtask=subtask.get("title"), matched=bool(match))
 
         if match:
+            relevance = workflow_relevance_for_subtask(subtask, match.workflow, goal)
+            if not relevance.applicable:
+                await send(
+                    {
+                        "type": "ultraplan_workflow_skipped",
+                        "subtask": subtask,
+                        "workflowId": match.workflow.get("id"),
+                        "workflowName": match.workflow.get("name"),
+                        "reason": relevance.reason,
+                    }
+                )
+                match = None
+            else:
+                await send(
+                    {
+                        "type": "ultraplan_workflow_selected",
+                        "subtask": subtask,
+                        "workflowId": match.workflow.get("id"),
+                        "workflowName": match.workflow.get("name"),
+                        "params": relevance.params,
+                    }
+                )
+
+        if match:
             runner = session or UltraPlanSession(send)
-            result = await runner.run_workflow_subtask(subtask, match.workflow, max_steps=max_steps_per_subtask)
+            result = await runner.run_workflow_subtask(
+                subtask,
+                match.workflow,
+                max_steps=max_steps_per_subtask,
+                params=relevance.params,
+            )
         else:
             result = await _run_agent_subtask(
                 send,

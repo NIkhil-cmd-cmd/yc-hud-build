@@ -5,7 +5,11 @@ import unittest
 os.environ["HOME"] = "/tmp"
 
 import ultraplan
-from ultraplan import match_subtask_to_workflow, parse_planner_json
+from ultraplan import (
+    match_subtask_to_workflow,
+    parse_planner_json,
+    workflow_relevance_for_subtask,
+)
 
 
 class UltraPlanTests(unittest.TestCase):
@@ -95,6 +99,60 @@ class UltraPlanTests(unittest.TestCase):
         self.assertIsNotNone(match_subtask_to_workflow(flight, [workflow]))
         self.assertIsNone(match_subtask_to_workflow(hotel, [workflow]))
 
+    def test_relevance_rejects_recorded_la_flight_for_italy_task(self):
+        workflow = {
+            "id": "la_flight",
+            "name": "Flight Search to LA",
+            "metadata": {
+                "domains": ["travel.flights"],
+                "capabilities": ["flight_search"],
+                "inputSchema": ["origin", "destination", "departDate"],
+            },
+            "actions": [
+                {"type": "type", "value": "SFO"},
+                {"type": "type", "value": "LAX"},
+                {"type": "type", "value": "2026-09-01"},
+            ],
+        }
+        subtask = {
+            "title": "Find flights",
+            "goal": "Find flights from SFO to Rome on 2026-09-01 for 1 traveler",
+            "domain": "travel.flights",
+        }
+
+        relevance = workflow_relevance_for_subtask(subtask, workflow, subtask["goal"])
+
+        self.assertFalse(relevance.applicable)
+        self.assertIn("conflicts", relevance.reason)
+
+    def test_relevance_accepts_parameterized_flight_workflow(self):
+        workflow = {
+            "id": "parameterized_flight",
+            "name": "Flight Search",
+            "metadata": {
+                "domains": ["travel.flights"],
+                "capabilities": ["flight_search"],
+                "inputSchema": ["origin", "destination", "departDate"],
+            },
+            "actions": [
+                {"type": "type", "value": "{origin}"},
+                {"type": "type", "value": "{destination}"},
+                {"type": "type", "value": "{departDate}"},
+            ],
+        }
+        subtask = {
+            "title": "Find flights",
+            "goal": "Find flights from SFO to Rome on 2026-09-01 for 1 traveler",
+            "domain": "travel.flights",
+        }
+
+        relevance = workflow_relevance_for_subtask(subtask, workflow, subtask["goal"])
+
+        self.assertTrue(relevance.applicable)
+        self.assertEqual(relevance.params["origin"], "SFO")
+        self.assertEqual(relevance.params["destination"], "Rome")
+        self.assertEqual(relevance.params["departDate"], "2026-09-01")
+
 
 class UltraPlanAsyncTests(unittest.IsolatedAsyncioTestCase):
     async def test_run_ultraplan_with_mocked_planner_and_workflow_runner(self):
@@ -119,7 +177,7 @@ class UltraPlanAsyncTests(unittest.IsolatedAsyncioTestCase):
             }
 
         class FakeSession:
-            async def run_workflow_subtask(self, subtask, workflow, *, max_steps):
+            async def run_workflow_subtask(self, subtask, workflow, *, max_steps, params=None):
                 return {"success": True, "steps": 2, "reason": "done"}
 
         old_decompose = ultraplan.decompose_goal
@@ -132,7 +190,11 @@ class UltraPlanAsyncTests(unittest.IsolatedAsyncioTestCase):
                     {
                         "id": "google_flights",
                         "name": "Flight Search (Google Flights)",
-                        "metadata": {"domains": ["travel.flights"], "capabilities": ["flight_search"]},
+                        "metadata": {
+                            "domains": ["travel.flights"],
+                            "capabilities": ["flight_search"],
+                            "inputSchema": ["origin", "destination"],
+                        },
                     }
                 ],
                 session=FakeSession(),
@@ -147,11 +209,66 @@ class UltraPlanAsyncTests(unittest.IsolatedAsyncioTestCase):
                 "ultraplan_started",
                 "execute_started",
                 "ultraplan_subtask_started",
+                "ultraplan_workflow_selected",
                 "ultraplan_subtask_done",
                 "ultraplan_done",
                 "execute_done",
             ],
         )
+
+    async def test_run_ultraplan_skips_irrelevant_workflow_and_calls_agent(self):
+        events = []
+
+        async def send(payload):
+            events.append(payload)
+
+        async def fake_decompose(goal, context=None):
+            return {
+                "summary": "Mock plan",
+                "subtasks": [
+                    {
+                        "id": "subtask_1",
+                        "title": "Find flights",
+                        "goal": "Find flights from SFO to Rome on 2026-09-01 for 1 traveler",
+                        "domain": "travel.flights",
+                        "requiredInputs": [],
+                        "safety": "stop_before_purchase",
+                    }
+                ],
+            }
+
+        async def fake_agent(send_fn, subtask, **kwargs):
+            await send_fn({"type": "agent_fallback_called"})
+            return {"success": True, "steps": 1, "reason": "agent_fallback"}
+
+        old_decompose = ultraplan.decompose_goal
+        old_agent = ultraplan._run_agent_subtask
+        ultraplan.decompose_goal = fake_decompose
+        ultraplan._run_agent_subtask = fake_agent
+        try:
+            result = await ultraplan.run_ultraplan(
+                send,
+                "Find flights from SFO to Rome on 2026-09-01 for 1 traveler",
+                workflows=[
+                    {
+                        "id": "la_flight",
+                        "name": "Flight Search to LA",
+                        "metadata": {
+                            "domains": ["travel.flights"],
+                            "capabilities": ["flight_search"],
+                            "inputSchema": ["origin", "destination", "departDate"],
+                        },
+                        "actions": [{"type": "type", "value": "LAX"}],
+                    }
+                ],
+            )
+        finally:
+            ultraplan.decompose_goal = old_decompose
+            ultraplan._run_agent_subtask = old_agent
+
+        self.assertTrue(result["success"])
+        self.assertIn("ultraplan_workflow_skipped", [event["type"] for event in events])
+        self.assertIn("agent_fallback_called", [event["type"] for event in events])
 
 
 if __name__ == "__main__":

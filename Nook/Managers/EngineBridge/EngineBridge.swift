@@ -692,6 +692,15 @@ final class EngineBridge {
             if let subtask = json["subtask"] as? [String: Any] {
                 executionProgress = "Done: \(subtask["title"] as? String ?? "Subtask")"
             }
+        case "ultraplan_workflow_selected":
+            let workflowName = json["workflowName"] as? String ?? "workflow"
+            executionProgress = "Using \(workflowName)"
+            lastActionDescription = "Using \(workflowName)"
+        case "ultraplan_workflow_skipped":
+            let workflowName = json["workflowName"] as? String ?? "workflow"
+            let reason = json["reason"] as? String ?? "not relevant"
+            executionProgress = "Skipping \(workflowName): \(reason)"
+            lastActionDescription = "Agent fallback"
         case "ultraplan_input_required":
             let question = json["question"] as? String ?? "Ultraplan needs more information."
             trajectoryLastError = question
