@@ -2,6 +2,12 @@
 
 Marketing site for **Tera browser**. Implements the Midu-structure plan with an editorial earth/nature aesthetic. The macOS app remains branded OpenHive internally until a future rebrand.
 
+## Live site
+
+**Production:** https://tera-zeta-ten.vercel.app
+
+**Vercel project:** [tera](https://vercel.com/nikhilcmdcmds-projects/tera) — connected to [yc-hud-build](https://github.com/NIkhil-cmd-cmd/yc-hud-build) (root: `website/tera`, branch: `graphvisualization`)
+
 ## Live preview (local)
 
 ```bash
