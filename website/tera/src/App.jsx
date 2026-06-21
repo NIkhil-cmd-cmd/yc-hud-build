@@ -1,4 +1,4 @@
-import { ShaderBackground, DARK_GRADIENT } from "./components/ShaderBackground.jsx";
+import { ShaderBackground, TESTIMONIALS_GRADIENT } from "./components/ShaderBackground.jsx";
 import { LiquidLogo } from "./components/LiquidLogo.jsx";
 import { LiquidGlass } from "./components/LiquidGlass.jsx";
 import { GrainCardArt } from "./components/GrainCardArt.jsx";
@@ -277,7 +277,12 @@ export default function App() {
         </section>
 
         <section className="section testimonials" aria-labelledby="testimonials-heading">
-          <ShaderBackground urlString={DARK_GRADIENT} className="testimonials-shader" pixelDensity={1.3} />
+          <ShaderBackground
+            urlString={TESTIMONIALS_GRADIENT}
+            className="testimonials-shader"
+            pixelDensity={1.2}
+            variant="testimonials"
+          />
           <div className="container testimonials-inner">
             <p className="section-label reveal">Trusted by builders</p>
             <h2 id="testimonials-heading" className="display reveal">

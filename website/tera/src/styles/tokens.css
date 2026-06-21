@@ -1,17 +1,24 @@
 :root {
-  --bg: #fafaf8;
-  --bg-warm: #f5f2ec;
-  --surface: #ffffff;
-  --text: #1a1a1a;
-  --text-muted: #6b6b6b;
-  --text-soft: #8a8a86;
-  --border: #e8e8e4;
-  --border-strong: #d4d4d0;
-  --accent: #c17d3a;
+  color-scheme: dark;
+
+  --bg: #090909;
+  --bg-warm: #111110;
+  --surface: #161616;
+  --surface-raised: #1c1c1a;
+  --text: #f5f2ec;
+  --text-muted: #a3a39d;
+  --text-soft: #7a7a74;
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.14);
+  --accent: #c4a484;
   --accent-deep: #8b6914;
-  --accent-soft: #e8ddd0;
-  --dark: #141414;
-  --dark-muted: #2a2a2a;
+  --accent-soft: #6b5d4f;
+  --dark: #090909;
+  --dark-muted: #141414;
+
+  --glass-bg: rgba(255, 255, 255, 0.05);
+  --glass-border: rgba(255, 255, 255, 0.1);
+  --glass-highlight: rgba(255, 255, 255, 0.14);
 
   --font-display: "Instrument Serif", "Georgia", serif;
   --font-body: "DM Sans", system-ui, sans-serif;
@@ -28,8 +35,8 @@
   --radius-lg: 24px;
 
   --ease-out: cubic-bezier(0.25, 0.1, 0.25, 1);
-  --shadow-soft: 0 12px 40px rgba(26, 26, 26, 0.06);
-  --shadow-lift: 0 24px 64px rgba(26, 26, 26, 0.12);
+  --shadow-soft: 0 12px 40px rgba(0, 0, 0, 0.35);
+  --shadow-lift: 0 24px 64px rgba(0, 0, 0, 0.5);
 
   --max-width: 1200px;
   --nav-height: 72px;

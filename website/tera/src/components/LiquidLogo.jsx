@@ -2,7 +2,6 @@ import { LiquidMetal } from "@paper-design/shaders-react";
 
 /**
  * Liquid Logo — @paper-design/shaders-react LiquidMetal (WebGL/GLSL).
- * Uses the Tera wordmark SVG for edge-aware liquid metal distortion.
  */
 export function LiquidLogo({ width = 108, height = 40, className = "" }) {
   return (
@@ -13,13 +12,13 @@ export function LiquidLogo({ width = 108, height = 40, className = "" }) {
         height={height}
         fit="contain"
         colorBack="#00000000"
-        colorTint="#1a1a1a"
+        colorTint="#f5f2ec"
         repetition={5}
-        softness={0.35}
-        distortion={0.18}
+        softness={0.4}
+        distortion={0.14}
         shiftRed={0.02}
         shiftBlue={-0.03}
-        speed={0.22}
+        speed={0.18}
         scale={1}
       />
     </div>
