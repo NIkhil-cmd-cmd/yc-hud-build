@@ -7,12 +7,20 @@ import os
 import re
 from typing import Any
 
+from browser_use_runner import OPENHIVE_SYSTEM_EXTENSION
 from log_config import log_event, setup_logging
 
 log = setup_logging("openhive.agent_llm")
 
 ALLOWED_ACTIONS = frozenset(
-    {"click", "click_date", "next_month", "click_xy", "type", "press", "done", "navigate"}
+    {
+        "click", "click_date", "next_month", "click_xy", "click_option", "type", "press", "done",
+        "navigate", "search", "new_tab", "switch_tab", "close_tab",
+        "scroll", "scroll_into_view", "select",
+        "go_back", "go_forward", "reload",
+        "hover", "check", "uncheck", "dblclick", "double_click",
+        "wait", "wait_for", "extract", "evaluate", "eval", "upload",
+    }
 )
 
 
@@ -73,11 +81,12 @@ def _task_prompt(task: dict[str, Any]) -> str:
 
 
 def _system_prompt() -> str:
-    return (
-        "You are a browser automation agent controlling a real web page via element refs. "
+    base = (
+        "You are a browser automation agent controlling a real web page via element refs (e0, e1, e2, …). "
         "Return ONLY valid JSON — no markdown, no explanation. "
         "Pick exactly ONE next action to progress the task."
     )
+    return base + OPENHIVE_SYSTEM_EXTENSION
 
 
 def _user_prompt(
@@ -107,14 +116,26 @@ def _user_prompt(
         f"Recent actions: {json.dumps(history[-8:], default=str)[:2000]}\n"
         f"Interactive elements (use ref exactly as shown):\n{json.dumps(compact_candidates, default=str)[:8000]}\n\n"
         "Allowed action JSON shapes:\n"
+        '{"action":"search","ref":null,"value":"your search query"}\n'
+        '{"action":"navigate","ref":null,"value":"https://example.com"}\n'
+        '{"action":"new_tab","ref":null,"value":"https://example.com"}\n'
         '{"action":"click","ref":"e3","value":null}\n'
         '{"action":"type","ref":"e1","value":"BOS"}\n'
         '{"action":"press","ref":null,"value":"Enter"}\n'
-        '{"action":"navigate","ref":null,"value":"https://example.com"}\n'
+        '{"action":"scroll","ref":null,"value":"down"}\n'
+        '{"action":"click_option","ref":null,"value":"Boston BOS"}\n'
+        '{"action":"hover","ref":"e2","value":null}\n'
+        '{"action":"check","ref":"e4","value":null}\n'
+        '{"action":"wait","ref":"e3","value":null}\n'
+        '{"action":"go_back","ref":null,"value":null}\n'
+        '{"action":"switch_tab","ref":null,"value":"0"}\n'
+        '{"action":"extract","ref":"e1","value":null}\n'
         '{"action":"done","ref":null,"value":null}\n\n'
         "Rules:\n"
-        "- Use refs from the candidate list only.\n"
-        "- For autocomplete dropdowns, type then press Enter or click the matching option.\n"
+        "- Prefer search for lookup/research tasks (faster than typing into Google manually).\n"
+        "- After typing in autocomplete fields, use click_option with the matching suggestion text.\n"
+        "- Use wait when the page is loading or a dropdown has not appeared yet.\n"
+        "- Use hover before clicking menu items that need mouseenter.\n"
         "- Use airport codes for flight origin/destination.\n"
         "- Return done only when the task is visibly complete on the page.\n"
         "- Prefer type over click for text fields; click for buttons and options."
@@ -145,25 +166,40 @@ def validate_action(action: dict[str, Any], candidates: list[dict[str, Any]]) ->
     if kind not in ALLOWED_ACTIONS:
         raise ValueError(f"Invalid action type: {kind!r}")
 
-    refs = {c.get("ref") for c in candidates if c.get("ref")}
+    if kind in {
+        "done", "navigate", "search", "new_tab", "scroll", "select", "press",
+        "go_back", "go_forward", "reload", "switch_tab", "close_tab",
+        "wait", "wait_for", "click_option", "evaluate", "eval", "upload",
+        "hover", "check", "uncheck", "dblclick", "double_click",
+        "scroll_into_view", "scrollintoview", "extract",
+    }:
+        if kind == "navigate":
+            url = action.get("value") or action.get("url")
+            if not url or not str(url).startswith("http"):
+                raise ValueError("navigate requires http(s) url in value")
+        if kind == "search":
+            q = action.get("value") or action.get("query")
+            if not q or not str(q).strip():
+                raise ValueError("search requires query in value")
+        if kind == "click_option":
+            q = action.get("value") or action.get("text")
+            if not q or not str(q).strip():
+                raise ValueError("click_option requires option text in value")
+        if kind == "click_xy":
+            if not isinstance(action.get("x"), (int, float)) or not isinstance(action.get("y"), (int, float)):
+                raise ValueError("click_xy requires numeric x/y")
+        return
 
-    if kind == "done":
-        return
-    if kind == "navigate":
-        url = action.get("value") or action.get("url")
-        if not url or not str(url).startswith("http"):
-            raise ValueError("navigate requires http(s) url in value")
-        return
-    if kind == "press":
-        return
-    if kind == "click_xy":
-        if not isinstance(action.get("x"), (int, float)) or not isinstance(action.get("y"), (int, float)):
-            raise ValueError("click_xy requires numeric x/y")
-        return
+    refs = {c.get("ref") for c in candidates if c.get("ref")}
+    normalized_refs = refs | {r.lstrip("@") for r in refs if isinstance(r, str)}
 
     ref = action.get("ref")
-    if ref and ref not in refs:
-        raise ValueError(f"Invalid ref {ref!r} — not in current candidates")
+    if ref and isinstance(ref, str):
+        ref_norm = ref.lstrip("@")
+        if ref not in refs and ref_norm not in normalized_refs:
+            raise ValueError(f"Invalid ref {ref!r} — not in current candidates")
+        if ref.startswith("@"):
+            action["ref"] = ref_norm
     if kind == "type" and not isinstance(action.get("value"), str):
         raise ValueError("type action requires string value")
 
@@ -234,6 +270,17 @@ async def choose_next_action(
     mode = agent_expert_mode()
     use_llm = mode == "llm" or (mode == "auto" and llm_available())
 
+    # Fast path: research/search tasks on blank or Google homepage → one-shot search
+    if step_index == 0 and not history:
+        goal = str(task.get("goal") or "").strip()
+        url = str(summary.get("url") or "")
+        on_start_page = not url or url.startswith("about:") or "google.com" in url
+        if goal and on_start_page and _looks_like_search_task(goal):
+            return (
+                {"action": "search", "value": _search_query_from_goal(goal)},
+                {"source": "nook_search", "model": "native-browser"},
+            )
+
     if use_llm:
         try:
             action, meta = await llm_next_action(task, summary, candidates, history, step_index)
@@ -256,3 +303,27 @@ async def choose_next_action(
         return {**fb, "action": fb.get("type", "type")}, {"source": "deterministic_fallback"}
 
     raise RuntimeError("No action available — configure OPENAI_API_KEY or provide a clearer task goal")
+
+
+def _looks_like_search_task(goal: str) -> bool:
+    lower = goal.lower()
+    triggers = ("search", "find", "look up", "lookup", "google", "youtube", "research")
+    return any(t in lower for t in triggers)
+
+
+def _search_query_from_goal(goal: str) -> str:
+    """Strip command verbs so search gets the actual query."""
+    q = goal.strip()
+    for prefix in (
+        "search for ",
+        "search ",
+        "find ",
+        "look up ",
+        "lookup ",
+        "google ",
+        "research ",
+    ):
+        if q.lower().startswith(prefix):
+            q = q[len(prefix) :].strip()
+            break
+    return q or goal

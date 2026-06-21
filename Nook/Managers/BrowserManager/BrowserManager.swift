@@ -938,7 +938,7 @@ class BrowserManager: ObservableObject {
     }
 
     /// Create a new tab and set it as active in the specified window
-    func createNewTab(in windowState: BrowserWindowState, url: String = "https://www.google.com") {
+    func createNewTab(in windowState: BrowserWindowState, url: String = "about:blank") {
         // Handle incognito windows - create ephemeral tabs
         if windowState.isIncognito, let profile = windowState.ephemeralProfile {
             let template = nookSettings?.resolvedSearchEngineTemplate ?? SearchProvider.google.queryTemplate
@@ -2209,6 +2209,21 @@ class BrowserManager: ObservableObject {
             return webViewCoordinator?.getWebView(for: tabId, in: windowId)
         }
         return webViewCoordinator?.getWebView(for: tabId, in: windowId)
+    }
+
+    /// Agent-home tabs skip the compositor — ensure a WKWebView exists for cookie sync + URL mirror.
+    func ensureWebView(for tabId: UUID, in windowId: UUID) -> WKWebView? {
+        if let existing = getWebView(for: tabId, in: windowId) {
+            return existing
+        }
+        let tabExists = tabManager.allTabs().contains { $0.id == tabId }
+            || windowRegistry?.windows[windowId]?.ephemeralTabs.contains { $0.id == tabId } == true
+        guard tabExists, webViewCoordinator != nil else { return nil }
+        let webView = createWebView(for: tabId, in: windowId)
+        if let tab = tabManager.allTabs().first(where: { $0.id == tabId }) {
+            tab.assignWebViewToWindow(webView, windowId: windowId)
+        }
+        return webView
     }
 
     /// DEPRECATED: Use WebViewCoordinator directly

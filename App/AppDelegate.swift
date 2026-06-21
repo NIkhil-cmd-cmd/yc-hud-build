@@ -63,6 +63,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         Task { @MainActor in
             OpenHiveLogger.log("AppDelegate", "applicationDidFinishLaunching")
             EngineBridge.shared.connect()
+            AgentNotchPanelController.shared.show()
         }
         let didFinishOnboarding = userDefaults.bool(forKey: "settings.didFinishOnboarding")
 

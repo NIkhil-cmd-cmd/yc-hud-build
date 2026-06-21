@@ -242,7 +242,7 @@ struct TopBarView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(6)
-        .background(urlBarBackgroundColor)
+        .liquidGlassSurface(cornerRadius: 8, thickness: .thin)
         .animation(
             shouldAnimateColorChange ? .easeInOut(duration: 0.3) : nil,
             value: urlBarBackgroundColor

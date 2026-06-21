@@ -1273,12 +1273,15 @@ class TabManager: ObservableObject {
 
     @discardableResult
     func createNewTab(
-        url: String = "https://www.google.com",
+        url: String = "about:blank",
         in space: Space? = nil
     ) -> Tab {
         let settings = nookSettings ?? browserManager?.nookSettings
         let template = settings?.resolvedSearchEngineTemplate ?? SearchProvider.google.queryTemplate
-        let normalizedUrl = normalizeURL(url, queryTemplate: template)
+        let isAgentHome = url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || url == "about:blank"
+            || url.hasPrefix("about:")
+        let normalizedUrl = isAgentHome ? "about:blank" : normalizeURL(url, queryTemplate: template)
         guard let validURL = URL(string: normalizedUrl)
         else {
             return createNewTab(in: space)
@@ -1315,6 +1318,9 @@ class TabManager: ObservableObject {
             index: 0, // New tabs get index 0 to appear at top
             browserManager: browserManager
         )
+        if isAgentHome {
+            newTab.isOpenHiveNewTab = true
+        }
         addTab(newTab)
         setActiveTab(newTab)
         return newTab
@@ -2301,7 +2307,7 @@ class TabManager: ObservableObject {
             
             // If no tabs exist, create a default tab with Google.com
             if self.currentTab == nil {
-                let defaultTab = createNewTab(url: "https://www.google.com", in: currentSpace)
+                let defaultTab = createNewTab(in: currentSpace)
                 self.currentTab = defaultTab
             }
 

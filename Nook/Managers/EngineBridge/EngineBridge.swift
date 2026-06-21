@@ -54,6 +54,7 @@ final class EngineBridge {
     }()
     private let sessionId = UUID().uuidString
     private var reconnectTask: Task<Void, Never>?
+    private var didSessionBootstrap = false
     private var executeWebView: WKWebView?
     private var executeTabId: UUID?
     private var executeWindowId: UUID?
@@ -65,6 +66,8 @@ final class EngineBridge {
     private var socketReady = false
     private var isConnecting = false
     private var reconnectAttempt = 0
+    private var activePlanId: String?
+    private var activePlanSubtaskIndex: Int = 0
 
     struct WorkflowSummary: Identifiable, Codable, Equatable {
         var id: String
@@ -72,16 +75,217 @@ final class EngineBridge {
         var steps: Int
     }
 
+    struct SkillSummary: Identifiable, Equatable {
+        var id: String
+        var name: String
+        var steps: Int
+        var bucketId: String?
+    }
+
+    struct BucketSummary: Identifiable, Equatable {
+        var id: String
+        var label: String
+        var skillIds: [String]
+    }
+
+    var skills: [SkillSummary] = []
+    var buckets: [BucketSummary] = []
+    var lastBenchmark: HUDBenchmarkResult = HUDBenchmarkResult()
+    var pendingMatchPrompt: String?
+    /// True when engine was started with OPENHIVE_USE_BROWSER_USE=1
+    var browserUseEnabled = false
+    /// In-tab agent available (LLM key configured) — runs in the current Nook WKWebView tab.
+    var inTabAgentEnabled = false
+    var engineReady = false
+    var agentModel = "gpt-4o"
+    var engineKeysConfigured = false
+    /// Set when engine routes a first-run flight demo to learning mode.
+    var flightDemoLearnPending = false
+    /// Set when engine found a learned flight skill — auto-replay without confirm sheet.
+    var flightDemoReplayMatch: SkillMatch?
+
     private init() {}
+
+    func enqueueMigrateSkills() {
+        guard !didSessionBootstrap else { return }
+        send(["type": "migrate_skills"])
+    }
+
+    func refreshSkills() {
+        send(["type": "list_skills"])
+    }
+
+    func refreshBuckets() {
+        send(["type": "list_buckets"])
+    }
+
+    func matchTask(prompt: String) {
+        pendingMatchPrompt = prompt
+        send(["type": "match_task", "prompt": prompt])
+    }
+
+    func confirmRunSkill(
+        skillId: String,
+        params: [String: String] = [:],
+        webView: WKWebView,
+        tabId: UUID,
+        windowId: UUID,
+        browserManager: BrowserManager
+    ) {
+        executeWebView = webView
+        executeTabId = tabId
+        executeWindowId = windowId
+        executeBrowserManager = browserManager
+        isExecuting = true
+        send(["type": "confirm_run_skill", "skillId": skillId, "params": params])
+    }
+
+    func runNativeAgent(
+        goal: String,
+        webView: WKWebView,
+        tabId: UUID,
+        windowId: UUID,
+        browserManager: BrowserManager
+    ) {
+        // In-tab agent: engine drives the current WKWebView (snapshot/@ref loop, no external Chrome).
+        startAgentTask(
+            goal: goal,
+            webView: webView,
+            tabId: tabId,
+            windowId: windowId,
+            browserManager: browserManager
+        )
+    }
+
+    func startPlan(
+        prompt: String,
+        webView: WKWebView,
+        tabId: UUID,
+        windowId: UUID,
+        browserManager: BrowserManager
+    ) {
+        executeWebView = webView
+        executeTabId = tabId
+        executeWindowId = windowId
+        executeBrowserManager = browserManager
+        activePlanId = nil
+        activePlanSubtaskIndex = 0
+        send(["type": "start_plan", "prompt": prompt])
+    }
+
+    func runSubtask(planId: String, index: Int) {
+        send(["type": "run_subtask", "planId": planId, "index": index])
+    }
+
+    private func advancePlanAfterStep(success: Bool) {
+        guard let planId = activePlanId else { return }
+        let index = activePlanSubtaskIndex
+        send([
+            "type": "run_subtask",
+            "planId": planId,
+            "index": index,
+            "markDone": true,
+            "success": success,
+        ])
+        let runState = TaskRunState.shared
+        let nextIndex = index + 1
+        if nextIndex < runState.subtasks.count {
+            activePlanSubtaskIndex = nextIndex
+            runState.currentSubtaskIndex = nextIndex
+            runSubtask(planId: planId, index: nextIndex)
+        } else {
+            activePlanId = nil
+            runState.completeRun(success: success)
+            WorkflowManager.postToast(success ? "Plan complete" : "Plan finished with errors", isError: !success)
+        }
+    }
+
+    private func executeOrchestratorResolution(_ json: [String: Any]) {
+        guard let resolution = json["resolution"] as? [String: Any],
+              let planId = json["planId"] as? String,
+              let index = json["index"] as? Int,
+              let webView = resolveExecuteWebView(),
+              let tabId = executeTabId,
+              let windowId = executeWindowId,
+              let browserManager = executeBrowserManager
+        else { return }
+
+        activePlanId = planId
+        activePlanSubtaskIndex = index
+        TaskRunState.shared.phase = .running
+        TaskRunState.shared.beginRun(skillName: nil, skillId: nil)
+
+        let mode = resolution["mode"] as? String ?? "agent"
+        if mode == "mdp", let skillId = resolution["skillId"] as? String {
+            confirmRunSkill(
+                skillId: skillId,
+                webView: webView,
+                tabId: tabId,
+                windowId: windowId,
+                browserManager: browserManager
+            )
+            return
+        }
+
+        var goal = resolution["goal"] as? String ?? TaskRunState.shared.prompt
+        var startURL: String? = nil
+        if let sub = json["subtask"] as? [String: Any],
+           sub["type"] as? String == "navigate" {
+            goal = sub["description"] as? String ?? "Open Google Flights"
+            startURL = "https://www.google.com/travel/flights"
+        }
+
+        var taskPayload: [String: Any] = ["goal": goal]
+        if let params = resolution["params"] as? [String: Any] {
+            for (key, value) in params {
+                taskPayload[key] = value
+            }
+        }
+
+        startAgentTask(
+            goal: goal,
+            startURL: startURL,
+            webView: webView,
+            tabId: tabId,
+            windowId: windowId,
+            browserManager: browserManager,
+            task: taskPayload
+        )
+    }
+
+    func startHUDBenchmark(prompt: String? = nil, skillId: String? = nil, mode: String = "task") {
+        lastBenchmark = HUDBenchmarkResult(isRunning: true, phase: "Native arm…")
+        var payload: [String: Any] = ["type": "start_hud_benchmark", "mode": mode]
+        if let prompt { payload["prompt"] = prompt }
+        if let skillId { payload["skillId"] = skillId }
+        send(payload)
+    }
+
+    func reinforceSkill(skillId: String, success: Bool = true) {
+        send([
+            "type": "reinforce_skill",
+            "skillId": skillId,
+            "sessionId": sessionId,
+            "success": success,
+        ])
+    }
 
     func connect(port: Int = defaultPort) {
         guard !isConnecting else { return }
+        if socketReady, let existing = webSocket, existing.state == .running {
+            return
+        }
         isConnecting = true
         socketReady = false
         isConnected = false
         reconnectTask?.cancel()
-        webSocket?.cancel(with: .goingAway, reason: nil)
-        outboundQueue.removeAll()
+        // Preserve in-flight agent commands across reconnect — connect() used to wipe these.
+        let preserved = outboundQueue.filter { Self.isCriticalOutbound($0) }
+        if let old = webSocket {
+            old.cancel(with: .normalClosure, reason: nil)
+        }
+        webSocket = nil
+        outboundQueue = preserved
 
         let url = URL(string: "ws://127.0.0.1:\(port)")!
         let ws = session.webSocketTask(with: url)
@@ -110,6 +314,8 @@ final class EngineBridge {
                     "sessionId": self.sessionId,
                 ])
                 self.enqueue(["type": "list_workflows"])
+                self.enqueue(["type": "list_skills"])
+                self.didSessionBootstrap = true
                 self.enqueue(["type": "get_token_metrics"])
                 self.flushQueue()
             }
@@ -118,7 +324,7 @@ final class EngineBridge {
 
     func disconnect() {
         reconnectTask?.cancel()
-        webSocket?.cancel(with: .goingAway, reason: nil)
+        webSocket?.cancel(with: .normalClosure, reason: nil)
         webSocket = nil
         socketReady = false
         isConnected = false
@@ -185,9 +391,19 @@ final class EngineBridge {
                 }
                 return origOpen ? origOpen.call(window, url, target, features) : null;
             };
+            // Dismiss common cookie/consent banners so clicks aren't blocked
+            const dismiss = ['Accept','Accept all','Agree','I agree','Got it','OK','Close','Reject all'];
+            for (const el of document.querySelectorAll('button, [role=button], a')) {
+                const t = (el.innerText || el.getAttribute('aria-label') || '').trim();
+                if (dismiss.some(d => t === d || t.startsWith(d))) {
+                    try { el.click(); } catch (_) {}
+                    break;
+                }
+            }
         })();
         """
         _ = try? await webView.evaluateJavaScript(script)
+        await OpenHiveObservation.installAgentAutomation(on: webView)
     }
 
     func removeAutomationHooks(on webView: WKWebView) async {
@@ -217,13 +433,16 @@ final class EngineBridge {
         type: String,
         webView: WKWebView,
         extra: [String: Any],
-        includeStartUrl: Bool = true
+        includeStartUrl: Bool = true,
+        includeStorageState: Bool = true
     ) {
         isExecuting = true
-        executionProgress = "Syncing cookies…"
+        executionProgress = includeStorageState ? "Syncing cookies…" : "Starting…"
         trajectoryLastError = nil
         Task { @MainActor in
-            let storage = await OpenHiveBrowserSync.exportStorageState(from: webView)
+            let storage: [String: Any] = includeStorageState
+                ? await OpenHiveBrowserSync.exportStorageState(from: webView)
+                : ["cookies": [] as [[String: Any]], "origins": [] as [[String: Any]]]
             let pageURL = webView.url?.absoluteString ?? ""
             let pageTitle = webView.title ?? ""
             var payload = extra
@@ -232,18 +451,105 @@ final class EngineBridge {
             payload["pageTitle"] = pageTitle
             payload["storageState"] = storage
             payload["maxSteps"] = 40
-            if includeStartUrl, !pageURL.isEmpty, !pageURL.hasPrefix("about:") {
-                payload["startUrl"] = pageURL
+            if includeStartUrl {
+                if let explicit = extra["startUrl"] as? String, !explicit.isEmpty {
+                    payload["startUrl"] = explicit
+                } else if !pageURL.isEmpty, !pageURL.hasPrefix("about:") {
+                    payload["startUrl"] = pageURL
+                } else {
+                    payload["startUrl"] = "https://www.google.com"
+                }
             }
-            guard send(payload) else {
+
+            guard await waitForSocketReady(timeoutSeconds: 12) else {
                 isExecuting = false
                 clearExecutionTarget()
-                let msg = connectionError ?? "Could not start agent — payload too large or engine disconnected"
+                TaskRunState.shared.phase = .idle
+                let msg = connectionError ?? "Engine not connected — run ./scripts/start_engine.sh"
                 trajectoryLastError = msg
                 WorkflowManager.postToast(msg, isError: true)
                 return
             }
-            executionProgress = "browser-use starting…"
+
+            payload["requireBrowserUse"] = false
+            guard await sendCriticalAndWait(payload) else {
+                isExecuting = false
+                clearExecutionTarget()
+                TaskRunState.shared.phase = .idle
+                let msg = connectionError ?? "Could not deliver agent task to engine — retry after engine reconnects"
+                trajectoryLastError = msg
+                WorkflowManager.postToast(msg, isError: true)
+                return
+            }
+            OpenHiveLogger.log("EngineBridge", "agent_payload_sent", data: ["type": type, "goal": extra["goal"] as? String ?? ""])
+            executionProgress = "Agent starting in this tab…"
+        }
+    }
+
+    /// Deliver agent payloads synchronously — fire-and-forget send() was losing messages on reconnect.
+    private func sendCriticalAndWait(_ dict: [String: Any]) async -> Bool {
+        guard JSONSerialization.isValidJSONObject(dict),
+              let data = try? JSONSerialization.data(withJSONObject: dict),
+              let text = String(data: data, encoding: .utf8)
+        else {
+            connectionError = "Invalid agent payload"
+            return false
+        }
+        if data.count > 512_000 {
+            connectionError = "Agent payload too large (\(data.count / 1024)KB)"
+            return false
+        }
+        guard let ws = webSocket, socketReady else {
+            connectionError = "Engine socket not ready"
+            return false
+        }
+        return await withCheckedContinuation { continuation in
+            ws.send(.string(text)) { [weak self] error in
+                Task { @MainActor in
+                    if let error {
+                        self?.connectionError = error.localizedDescription
+                        self?.socketReady = false
+                        self?.isConnected = false
+                        continuation.resume(returning: false)
+                    } else {
+                        continuation.resume(returning: true)
+                    }
+                }
+            }
+        }
+    }
+
+    private func revealCompositorForAgentRun() {
+        guard let tabId = executeTabId,
+              let windowId = executeWindowId,
+              let browserManager = executeBrowserManager,
+              let windowState = browserManager.windowRegistry?.windows[windowId],
+              let tab = browserManager.tabManager.allTabs().first(where: { $0.id == tabId })
+        else { return }
+        tab.isOpenHiveNewTab = false
+        browserManager.refreshCompositor(for: windowState)
+    }
+
+    /// Wait until WebSocket handshake completes before sending agent payloads.
+    private func waitForSocketReady(timeoutSeconds: Double) async -> Bool {
+        if socketReady { return true }
+        if !isConnecting { connect() }
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        while Date() < deadline {
+            if socketReady { return true }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return socketReady
+    }
+
+    private static func isCriticalOutbound(_ dict: [String: Any]) -> Bool {
+        guard let type = dict["type"] as? String else { return false }
+        switch type {
+        case "start_agent", "run_agent", "start_trajectory", "execute_workflow",
+             "confirm_run_skill", "cancel_trajectory", "cancel_execute":
+            return true
+        default:
+            return false
         }
     }
 
@@ -253,6 +559,57 @@ final class EngineBridge {
         clearExecutionTarget()
     }
 
+    func startFlightDemoLearn(
+        webView: WKWebView,
+        tabId: UUID,
+        windowId: UUID,
+        browserManager: BrowserManager
+    ) {
+        startFlightTrajectory(
+            webView: webView,
+            tabId: tabId,
+            windowId: windowId,
+            browserManager: browserManager,
+            flightDemoLearn: true
+        )
+    }
+
+    func startFlightDemoReplay(
+        webView: WKWebView,
+        tabId: UUID,
+        windowId: UUID,
+        browserManager: BrowserManager
+    ) {
+        startFlightTrajectory(
+            webView: webView,
+            tabId: tabId,
+            windowId: windowId,
+            browserManager: browserManager,
+            flightDemoReplay: true
+        )
+    }
+
+    private func startFlightTrajectory(
+        webView: WKWebView,
+        tabId: UUID,
+        windowId: UUID,
+        browserManager: BrowserManager,
+        flightDemoLearn: Bool = false,
+        flightDemoReplay: Bool = false
+    ) {
+        startTrajectory(
+            origin: FlightDemoRouter.origin,
+            destination: FlightDemoRouter.destination,
+            departDate: FlightDemoRouter.departDate,
+            webView: webView,
+            tabId: tabId,
+            windowId: windowId,
+            browserManager: browserManager,
+            flightDemoLearn: flightDemoLearn,
+            flightDemoReplay: flightDemoReplay
+        )
+    }
+
     func startTrajectory(
         origin: String,
         destination: String,
@@ -260,7 +617,9 @@ final class EngineBridge {
         webView: WKWebView,
         tabId: UUID,
         windowId: UUID,
-        browserManager: BrowserManager
+        browserManager: BrowserManager,
+        flightDemoLearn: Bool = false,
+        flightDemoReplay: Bool = false
     ) {
         guard !isExecuting else {
             trajectoryLastError = "Cancel the running workflow first"
@@ -281,9 +640,12 @@ final class EngineBridge {
                     "origin": origin,
                     "destination": destination,
                     "departDate": departDate,
+                    "flightDemoLearn": flightDemoLearn,
+                    "flightDemoReplay": flightDemoReplay,
                 ],
             ],
-            includeStartUrl: false
+            includeStartUrl: false,
+            includeStorageState: false
         )
     }
 
@@ -300,7 +662,8 @@ final class EngineBridge {
         webView: WKWebView,
         tabId: UUID,
         windowId: UUID,
-        browserManager: BrowserManager
+        browserManager: BrowserManager,
+        task: [String: Any]? = nil
     ) {
         guard !isExecuting else {
             trajectoryLastError = "Cancel the running agent first"
@@ -313,13 +676,17 @@ final class EngineBridge {
         trajectoryStepLog.removeAll()
         trajectoryLastError = nil
         currentTrajectoryTask = nil
+        var extra: [String: Any] = [
+            "goal": goal,
+            "task": task ?? ["goal": goal],
+        ]
+        if let startURL, !startURL.isEmpty {
+            extra["startUrl"] = startURL
+        }
         sendBrowserUsePayload(
             type: "start_agent",
             webView: webView,
-            extra: [
-                "goal": goal,
-                "task": ["goal": goal],
-            ]
+            extra: extra
         )
     }
 
@@ -480,9 +847,178 @@ final class EngineBridge {
         case "observer_attached":
             isConnected = true
             connectionError = nil
-            OpenHiveLogger.log("EngineBridge", "observer_attached", data: ["sessionId": sessionId])
+            engineReady = true
+            if let flag = json["browserUse"] as? Bool {
+                browserUseEnabled = flag
+            }
+            if let flag = json["inTabAgent"] as? Bool {
+                inTabAgentEnabled = flag
+            } else {
+                inTabAgentEnabled = engineReady && !browserUseEnabled
+            }
+            if let cfg = json["engineConfig"] as? [String: Any] {
+                applyEngineConfig(cfg)
+            }
+            OpenHiveLogger.log("EngineBridge", "observer_attached", data: ["sessionId": sessionId, "browserUse": browserUseEnabled, "model": agentModel])
         case "step_observed":
             observedStepCount = json["count"] as? Int ?? observedStepCount
+        case "match_task_result":
+            let runState = TaskRunState.shared
+            if json["flightDemoLearn"] as? Bool == true {
+                runState.phase = .idle
+                flightDemoLearnPending = true
+                break
+            }
+            if json["flightDemoReplay"] as? Bool == true,
+               let best = json["bestSkill"] as? [String: Any],
+               let skillId = best["skillId"] as? String,
+               let name = best["name"] as? String {
+                let confidence = best["confidence"] as? Double ?? 0.99
+                let mdpId = best["mdpId"] as? String ?? skillId
+                runState.phase = .idle
+                flightDemoReplayMatch = SkillMatch(
+                    skillId: skillId,
+                    name: name,
+                    confidence: confidence,
+                    mdpId: mdpId
+                )
+                break
+            }
+            if let best = json["bestSkill"] as? [String: Any],
+               let skillId = best["skillId"] as? String,
+               let name = best["name"] as? String,
+               json["meetsThreshold"] as? Bool == true {
+                let confidence = best["confidence"] as? Double ?? 0
+                let mdpId = best["mdpId"] as? String ?? skillId
+                runState.presentConfirmation(SkillMatch(skillId: skillId, name: name, confidence: confidence, mdpId: mdpId))
+            } else if runState.agentModeEnabled {
+                runState.shouldRunAgentAfterMiss = true
+            } else {
+                runState.phase = .idle
+                WorkflowManager.postToast("No matching skill — enable Agent mode", isError: true)
+            }
+        case "flight_demo_saved":
+            refreshSkills()
+            if let msg = json["message"] as? String {
+                WorkflowManager.postToast(msg, isError: false)
+            }
+        case "skills_list":
+            if let raw = json["skills"] as? [[String: Any]] {
+                skills = raw.compactMap { s in
+                    guard let id = s["id"] as? String else { return nil }
+                    return SkillSummary(
+                        id: id,
+                        name: s["name"] as? String ?? id,
+                        steps: (s["stats"] as? [String: Any])?["runs"] as? Int ?? 0,
+                        bucketId: s["bucketId"] as? String
+                    )
+                }
+            }
+        case "buckets_list":
+            if let raw = json["buckets"] as? [[String: Any]] {
+                buckets = raw.compactMap { b in
+                    guard let id = b["id"] as? String else { return nil }
+                    return BucketSummary(
+                        id: id,
+                        label: b["label"] as? String ?? id,
+                        skillIds: b["skillIds"] as? [String] ?? []
+                    )
+                }
+            }
+        case "plan_created":
+            let runState = TaskRunState.shared
+            runState.planId = json["planId"] as? String
+            if let subs = json["subtasks"] as? [[String: Any]] {
+                runState.subtasks = subs.enumerated().compactMap { idx, st in
+                    guard let type = st["type"] as? String else { return nil }
+                    return PlanSubtask(
+                        id: "\(idx)",
+                        index: st["index"] as? Int ?? idx,
+                        type: type,
+                        description: st["description"] as? String ?? type,
+                        status: st["status"] as? String ?? "pending"
+                    )
+                }
+            }
+            runState.phase = .planning
+            runState.beginRun(skillName: "Plan", skillId: nil)
+            if let planId = runState.planId {
+                activePlanId = planId
+                activePlanSubtaskIndex = 0
+                runState.currentSubtaskIndex = 0
+                runSubtask(planId: planId, index: 0)
+            }
+        case "plan_progress":
+            let runState = TaskRunState.shared
+            if let subs = json["subtasks"] as? [[String: Any]] {
+                runState.subtasks = subs.enumerated().compactMap { idx, st in
+                    guard let type = st["type"] as? String else { return nil }
+                    return PlanSubtask(
+                        id: "\(idx)",
+                        index: st["index"] as? Int ?? idx,
+                        type: type,
+                        description: st["description"] as? String ?? type,
+                        status: st["status"] as? String ?? "pending"
+                    )
+                }
+            }
+            runState.currentSubtaskIndex = json["currentIndex"] as? Int ?? runState.currentSubtaskIndex
+        case "orchestrator_step":
+            let runState = TaskRunState.shared
+            if let sub = json["subtask"] as? [String: Any] {
+                runState.appendStep(sub["description"] as? String ?? "Subtask")
+            }
+            executeOrchestratorResolution(json)
+        case "mdp_step":
+            let runState = TaskRunState.shared
+            let stateId = json["stateId"] as? String ?? ""
+            let nextId = json["nextStateId"] as? String ?? ""
+            let action = json["action"] as? String ?? "step"
+            runState.handleMDPStep(stateId: stateId, nextStateId: nextId, action: action)
+            AgentNotchPanelController.shared.reposition()
+        case "benchmark_progress":
+            var bench = lastBenchmark
+            bench.isRunning = true
+            if let phase = json["phase"] as? String {
+                bench.phase = phase == "native" ? "Native arm…" : "HUD browser…"
+            }
+            if let result = json["result"] as? [String: Any], json["phase"] as? String == "native" {
+                bench.nativeMs = result["elapsedMs"] as? Int ?? 0
+                bench.nativeTokens = result["tokens"] as? Int ?? 0
+                bench.nativeGrade = result["hudGrade"] as? Double ?? 0
+            }
+            if let result = json["result"] as? [String: Any], json["phase"] as? String == "hud" {
+                bench.hudMs = result["elapsedMs"] as? Int ?? 0
+                bench.hudTokens = result["tokens"] as? Int ?? 0
+                bench.hudGrade = result["hudGrade"] as? Double ?? 0
+            }
+            lastBenchmark = bench
+        case "benchmark_complete":
+            var bench = HUDBenchmarkResult()
+            bench.isRunning = false
+            bench.runId = json["runId"] as? String
+            if let comparison = json["comparison"] as? [String: Any] {
+                bench.nativeMs = comparison["nativeMs"] as? Int ?? 0
+                bench.hudMs = comparison["hudMs"] as? Int ?? 0
+                bench.nativeTokens = comparison["nativeTokens"] as? Int ?? 0
+                bench.hudTokens = comparison["hudTokens"] as? Int ?? 0
+                bench.speedup = comparison["speedup"] as? Double ?? 1
+            }
+            if let native = json["native"] as? [String: Any] {
+                bench.nativeGrade = native["hudGrade"] as? Double ?? 0
+            }
+            if let hud = json["hud"] as? [String: Any] {
+                bench.hudGrade = hud["hudGrade"] as? Double ?? 0
+            }
+            lastBenchmark = bench
+            TaskRunState.shared.lastBenchmarkRunId = bench.runId
+        case "skill_reinforced":
+            refreshSkills()
+            WorkflowManager.postToast("Skill reinforced")
+        case "skills_migrated":
+            didSessionBootstrap = true
+            refreshSkills()
+            refreshBuckets()
         case "workflows_list":
             if let raw = json["workflows"] as? [[String: Any]] {
                 workflows = raw.compactMap { w in
@@ -525,23 +1061,37 @@ final class EngineBridge {
             } else if type == "run_metric" {
                 TokenDashboardManager.shared.refresh()
             }
+        case "agent_progress":
+            if let message = json["message"] as? String {
+                executionProgress = message
+            }
+            revealCompositorForAgentRun()
         case "execute_started":
             isExecuting = true
             lastActionDescription = nil
             executionProgress = "Starting…"
             hudReward = nil
             hudStatus = nil
+            revealCompositorForAgentRun()
+            AgentNotchPanelController.shared.show()
+            AgentNotchViewModel.shared.open()
             let backend = json["backend"] as? String ?? "webkit"
             if backend == "browser-use" {
-                executionProgress = "browser-use agent (Chromium)…"
+                executionProgress = "External browser-use (Chromium)…"
                 let cookies = json["cookiesSynced"] as? Int ?? 0
                 let cookieNote = cookies > 0 ? " · \(cookies) cookies synced" : ""
-                WorkflowManager.postToast("browser-use running — Nook tab mirrors agent\(cookieNote)")
+                WorkflowManager.postToast("External browser-use — separate Chromium window\(cookieNote)")
             } else if backend == "playwright" {
                 executionProgress = "Playwright browser…"
-            } else if let webView = resolveExecuteWebView() {
-                await installAutomationHooks(on: webView)
-                await sendExecuteState(webView: webView)
+            } else {
+                executionProgress = "Agent running in this tab…"
+                if let webView = resolveExecuteWebView() {
+                    await installAutomationHooks(on: webView)
+                    // Trajectory sends navigate first — avoid stale execute_state before that.
+                    if currentTrajectoryTask == nil {
+                        await sendExecuteState(webView: webView)
+                    }
+                }
             }
         case "execute_action":
             let backend = json["backend"] as? String ?? "webkit"
@@ -574,45 +1124,97 @@ final class EngineBridge {
                   let action = json["action"] as? [String: Any] else { break }
             OpenHiveObservation.inject(into: webView)
             let actionType = action["type"] as? String ?? ""
-            var (ok, detail) = await WebViewAutomation.perform(action, on: webView)
-            if !ok, actionType == "click", let retryView = resolveExecuteWebView() {
-                try? await Task.sleep(nanoseconds: 600_000_000)
-                let retry = await WebViewAutomation.perform(action, on: retryView)
-                ok = retry.success
-                detail = retry.detail
+            var ok: Bool
+            var detail: String
+
+            if NookBrowserController.isBrowserAction(actionType),
+               let tabId = executeTabId,
+               let windowId = executeWindowId,
+               let browserManager = executeBrowserManager {
+                let ctx = NookBrowserController.Context(
+                    browserManager: browserManager,
+                    windowId: windowId,
+                    tabId: tabId
+                )
+                let result = await NookBrowserController.perform(action, context: ctx, webView: webView)
+                ok = result.success
+                detail = result.detail
+                if let newTabId = result.newTabId {
+                    executeTabId = newTabId
+                    executeWebView = browserManager.ensureWebView(for: newTabId, in: windowId)
+                    if let newView = executeWebView {
+                        await installAutomationHooks(on: newView)
+                    }
+                }
+            } else {
+                var pageResult = await WebViewAutomation.perform(action, on: webView)
+                ok = pageResult.success
+                detail = pageResult.detail
+                if !ok, actionType == "click", let retryView = resolveExecuteWebView() {
+                    try? await Task.sleep(nanoseconds: 600_000_000)
+                    pageResult = await WebViewAutomation.perform(action, on: retryView)
+                    ok = pageResult.success
+                    detail = pageResult.detail
+                }
             }
             if !ok {
                 OpenHiveLogger.error("EngineBridge", "action_failed", data: ["action": action, "detail": detail])
             } else {
                 OpenHiveLogger.log("EngineBridge", "action_ok", data: ["detail": detail])
             }
-            await WebViewAutomation.waitForSettle(on: webView, actionType: actionType)
+            await WebViewAutomation.waitForSettle(on: webView, actionType: actionType == "wait" ? "navigate" : actionType)
             await sendExecuteState(webView: webView, lastActionOk: ok, lastActionDetail: detail)
         case "execute_done":
+            let planWasActive = activePlanId != nil
+            let planSuccess = json["hudStatus"] as? String != "partial"
             isExecuting = false
             if let webView = executeWebView {
                 await removeAutomationHooks(on: webView)
             }
-            clearExecutionTarget()
-            executionProgress = nil
-            lastActionDescription = nil
-            connectionError = nil
-            AgentExecutionState.shared.end()
-            hudReward = json["reward"] as? Double
-            hudStatus = json["hudStatus"] as? String
-            if currentTrajectoryTask != nil {
-                currentTrajectoryTask = nil
+            if planWasActive {
+                if TaskRunState.shared.isRecording {
+                    compileWorkflow(name: TaskRunState.shared.prompt.prefix(40).description)
+                }
+                advancePlanAfterStep(success: planSuccess)
             } else {
-                WorkflowManager.shared.onExecuteDone(
-                    hudReward: hudReward,
-                    hudStatus: hudStatus,
-                    hudContent: json["hudContent"] as? String
-                )
+                clearExecutionTarget()
+                executionProgress = nil
+                lastActionDescription = nil
+                connectionError = nil
+                AgentExecutionState.shared.end()
+                TaskRunState.shared.completeRun(success: planSuccess)
+                if TaskRunState.shared.isRecording {
+                    compileWorkflow(name: TaskRunState.shared.prompt.prefix(40).description)
+                }
+                hudReward = json["reward"] as? Double
+                hudStatus = json["hudStatus"] as? String
+                if currentTrajectoryTask != nil {
+                    currentTrajectoryTask = nil
+                } else {
+                    WorkflowManager.shared.onExecuteDone(
+                        hudReward: hudReward,
+                        hudStatus: hudStatus,
+                        hudContent: json["hudContent"] as? String
+                    )
+                }
+                requestTokenMetrics()
             }
-            requestTokenMetrics()
         case "agent_step":
             let step = json["step"] as? Int ?? trajectoryStepLog.count + 1
             let actionType = json["action"] as? String ?? "?"
+            let mode = json["mode"] as? String ?? "agent"
+            let prefix: String
+            switch mode {
+            case "learning": prefix = "Learn"
+            case "replay": prefix = "Replay"
+            default: prefix = "Agent"
+            }
+            TaskRunState.shared.appendStep("\(prefix): \(actionType)")
+            if let model = json["model"] as? String {
+                TaskRunState.shared.agentModel = model
+                agentModel = model
+            }
+            AgentNotchPanelController.shared.reposition(animated: true)
             let provider = json["provider"] as? String ?? "llm"
             let model = json["model"] as? String
             let stepURL = json["url"] as? String ?? ""
@@ -639,6 +1241,20 @@ final class EngineBridge {
         case "trajectory_complete":
             currentTrajectoryTask = nil
             isExecuting = false
+            let success = json["success"] as? Bool ?? false
+            if activePlanId != nil {
+                if TaskRunState.shared.isRecording {
+                    compileWorkflow(name: TaskRunState.shared.prompt.prefix(40).description)
+                }
+                advancePlanAfterStep(success: success)
+            } else {
+                TaskRunState.shared.completeRun(success: success)
+                TaskRunState.shared.notchExpanded = true
+                if TaskRunState.shared.isRecording {
+                    compileWorkflow(name: TaskRunState.shared.prompt.prefix(40).description)
+                }
+            }
+            AgentNotchPanelController.shared.reposition(animated: true)
             if let finalURL = json["finalUrl"] as? String,
                json["mirrorUrl"] as? Bool == true,
                let webView = resolveExecuteWebView(),
@@ -650,16 +1266,19 @@ final class EngineBridge {
                     force: true
                 )
             }
-            clearExecutionTarget()
+            if activePlanId == nil {
+                clearExecutionTarget()
+            }
             executionProgress = nil
-            let success = json["success"] as? Bool ?? false
             let steps = json["steps"] as? Int ?? trajectoryStepLog.count
-            if success {
-                WorkflowManager.postToast("Trajectory complete (\(steps) steps)")
-            } else {
-                let reason = json["reason"] as? String ?? "failed"
-                trajectoryLastError = "Trajectory \(reason)"
-                WorkflowManager.postToast(trajectoryLastError ?? "Trajectory failed", isError: true)
+            if activePlanId == nil {
+                if success {
+                    WorkflowManager.postToast("Agent complete (\(steps) steps)")
+                } else {
+                    let reason = json["reason"] as? String ?? "failed"
+                    trajectoryLastError = "Agent \(reason)"
+                    WorkflowManager.postToast(trajectoryLastError ?? "Agent failed", isError: true)
+                }
             }
         case "execute_cancelled":
             isExecuting = false
@@ -674,6 +1293,7 @@ final class EngineBridge {
             if isExecuting {
                 isExecuting = false
                 clearExecutionTarget()
+                TaskRunState.shared.phase = .idle
                 WorkflowManager.shared.lastError = msg
                 WorkflowManager.postToast(msg ?? "Engine error", isError: true)
             } else if currentTrajectoryTask != nil {
@@ -710,15 +1330,14 @@ final class EngineBridge {
     }
 
     private func sendExecuteState(webView: WKWebView, lastActionOk: Bool? = nil, lastActionDetail: String? = nil) async {
-        async let elementsTask = BrowserToolExecutor.interactiveElements(from: webView)
-        async let candidatesTask = BrowserToolExecutor.trajectoryCandidates(from: webView)
+        await OpenHiveObservation.installAgentAutomation(on: webView)
+        async let candidatesTask = OpenHiveObservation.agentCandidates(from: webView)
         async let pageTextTask = BrowserToolExecutor.pageText(from: webView)
-        let elements = await elementsTask
         let candidates = await candidatesTask
         let pageText = await pageTextTask
         let tree: [String: Any] = [
-            "elements": elements,
-            "count": elements.count,
+            "elements": candidates,
+            "count": candidates.count,
             "candidates": candidates,
         ]
         var payload: [String: Any] = [
@@ -734,6 +1353,22 @@ final class EngineBridge {
         send(payload)
     }
 
+    private func applyEngineConfig(_ cfg: [String: Any]) {
+        if let model = cfg["agentModel"] as? String {
+            agentModel = model
+            TaskRunState.shared.agentModel = model
+        }
+        if let bu = cfg["browserUse"] as? Bool {
+            browserUseEnabled = bu
+        }
+        if let tab = cfg["inTabAgent"] as? Bool {
+            inTabAgentEnabled = tab
+        }
+        if let keys = cfg["keys"] as? [String: Bool] {
+            engineKeysConfigured = keys["OPENAI_API_KEY"] == true
+        }
+    }
+
     private func describeAction(_ action: [String: Any]) -> String {
         let type = action["type"] as? String ?? "?"
         switch type {
@@ -747,6 +1382,28 @@ final class EngineBridge {
             return "Type: \(val.prefix(40))"
         case "navigate":
             return "Go to: \((action["url"] as? String ?? "").prefix(50))"
+        case "search":
+            return "Search: \((action["value"] as? String ?? action["query"] as? String ?? "").prefix(50))"
+        case "new_tab":
+            return "New tab: \((action["url"] as? String ?? "blank").prefix(50))"
+        case "scroll":
+            return "Scroll: \(action["value"] as? String ?? action["direction"] as? String ?? "down")"
+        case "wait", "wait_for":
+            return "Wait: \(action["ref"] as? String ?? action["text"] as? String ?? "page")"
+        case "click_option":
+            return "Pick option: \((action["value"] as? String ?? "").prefix(40))"
+        case "extract":
+            return "Extract text"
+        case "hover":
+            return "Hover: \(action["ref"] as? String ?? "?")"
+        case "check", "uncheck":
+            return "\(type == "check" ? "Check" : "Uncheck"): \(action["ref"] as? String ?? "?")"
+        case "switch_tab":
+            return "Switch tab: \(action["value"] as? String ?? "?")"
+        case "close_tab":
+            return "Close tab"
+        case "go_back", "go_forward", "reload":
+            return type.replacingOccurrences(of: "_", with: " ").capitalized
         default:
             return type
         }

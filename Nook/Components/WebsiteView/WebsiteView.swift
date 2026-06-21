@@ -204,7 +204,11 @@ struct WebsiteView: View {
         let _ = windowState.compositorVersion
         ZStack() {
             Group {
-                if browserManager.currentTab(for: windowState) != nil {
+                if let tab = browserManager.currentTab(for: windowState), tab.isOpenHiveNewTab {
+                    AgentHomeView()
+                        .environmentObject(browserManager)
+                        .environment(windowState)
+                } else if browserManager.currentTab(for: windowState) != nil {
                     GeometryReader { proxy in
                         TabCompositorWrapper(
                             browserManager: browserManager,

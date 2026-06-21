@@ -168,8 +168,11 @@ class PolicyExecutor:
         self.step_index = 0
         self.replay_index = 0
         self.current_node: str | None = None
+        self.last_state_id: str | None = None
+        self.mdp_path: list[str] = []
         self.replay_only = bool(self.ordered_actions)
         self._policy_loop = not bool(self.ordered_actions)
+        self.skill_id = workflow.get("id", "")
 
     async def next_action(
         self,
@@ -189,6 +192,10 @@ class PolicyExecutor:
                     continue
             self.tier_log.append(1)
             self.step_index += 1
+            state_id = str(self.replay_index - 1)
+            next_state_id = str(self.replay_index)
+            self.last_state_id = next_state_id
+            self.mdp_path.append(next_state_id)
             return {
                 "done": False,
                 "tier": 1,
@@ -197,6 +204,9 @@ class PolicyExecutor:
                 "mode": "replay",
                 "step": self.replay_index,
                 "total": len(self.ordered_actions),
+                "stateId": state_id,
+                "nextStateId": next_state_id,
+                "skillId": self.skill_id,
             }
 
         if self.replay_only and not self._policy_loop:
@@ -213,7 +223,20 @@ class PolicyExecutor:
         if t1:
             self.tier_log.append(1)
             self.step_index += 1
-            return {**t1, "done": False, "tier": 1, "tokens": self.tokens, "mode": "policy_node"}
+            prev = self.last_state_id or "0"
+            node_id = str(t1.pop("_nodeId", self.step_index))
+            self.last_state_id = node_id
+            self.mdp_path.append(node_id)
+            return {
+                **t1,
+                "done": False,
+                "tier": 1,
+                "tokens": self.tokens,
+                "mode": "policy_node",
+                "stateId": prev,
+                "nextStateId": node_id,
+                "skillId": self.skill_id,
+            }
 
         best_nid, best_sim = None, -1.0
         for nid, node in self.nodes.items():
@@ -228,6 +251,10 @@ class PolicyExecutor:
             entry = self.policy[best_nid]
             action = self._templatize(entry.get("action", {}))
             if action.get("type"):
+                prev = self.last_state_id or "0"
+                nxt = str(entry.get("next", best_nid))
+                self.last_state_id = nxt
+                self.mdp_path.append(nxt)
                 self.tier_log.append(1)
                 self.step_index += 1
                 return {
@@ -237,6 +264,9 @@ class PolicyExecutor:
                     "action": action,
                     "sim": round(best_sim, 3),
                     "mode": "policy_match",
+                    "stateId": prev,
+                    "nextStateId": nxt,
+                    "skillId": self.skill_id,
                 }
 
         tier2 = await self._tier2_action(url, title, candidates)
@@ -292,7 +322,7 @@ class PolicyExecutor:
         best_action = actions[0]
         matched = await _match_element(best_action, candidates)
         if matched:
-            return {"action": matched, "sim": round(best_sim, 3)}
+            return {"action": matched, "sim": round(best_sim, 3), "_nodeId": best_node.get("id", 0)}
         return None
 
     async def _tier2_action(self, url: str, title: str, candidates: list[dict]) -> dict | None:

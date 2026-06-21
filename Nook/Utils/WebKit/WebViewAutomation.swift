@@ -5,7 +5,7 @@ import WebKit
 @MainActor
 enum WebViewAutomation {
     private static let candidateSelector =
-        "input, textarea, button, [role=button], [role=option], [role=gridcell], [role=menuitem], [aria-label], a"
+        "input, textarea, button, [role=button], [role=option], [role=gridcell], [role=menuitem], [role=combobox], [role=searchbox], [aria-label], li, span, div[jsaction], a"
 
     static func perform(_ action: [String: Any], on webView: WKWebView) async -> (success: Bool, detail: String) {
         guard let type = action["type"] as? String else {
@@ -15,17 +15,32 @@ enum WebViewAutomation {
         switch type {
         case "navigate":
             return await navigate(action, on: webView)
+        case "search":
+            return search(action, on: webView)
         case "click":
             return await click(action, on: webView)
         case "type", "fill":
             return await typeText(action, on: webView)
         case "press":
             return await pressKey(action, on: webView)
+        case "scroll":
+            return await scroll(action, on: webView)
+        case "select":
+            return await selectOption(action, on: webView)
         case "done":
             return (true, "Task complete")
         default:
+            if let extended = await performExtended(type, action, on: webView) {
+                return extended
+            }
             return (false, "Unknown action type: \(type)")
         }
+    }
+
+    /// Exposed for page-level search routing.
+    static func search(_ action: [String: Any], on webView: WKWebView) -> (success: Bool, detail: String) {
+        let result = NookBrowserController.search(action, on: webView)
+        return (result.success, result.detail)
     }
 
     static func waitForSettle(on webView: WKWebView, actionType: String) async {
@@ -64,6 +79,12 @@ enum WebViewAutomation {
     }
 
     private static func click(_ action: [String: Any], on webView: WKWebView) async -> (success: Bool, detail: String) {
+        if action["partial"] as? Bool == true,
+           let text = action["text"] as? String, !text.isEmpty,
+           let result = await clickByPartial(text, on: webView) {
+            return result
+        }
+
         if let ref = action["ref"] as? String, !ref.isEmpty,
            let result = await clickByRef(ref, on: webView) {
             return result
@@ -116,54 +137,112 @@ enum WebViewAutomation {
         (function() {
             const key = \(keyJSON);
             const el = document.activeElement || document.body;
-            const codes = { Enter: 13, Escape: 27, Tab: 9, ArrowDown: 40, ArrowUp: 38 };
+            if (key === 'Meta+a' || key === 'Control+a' || key === 'SelectAll') {
+                if (el.select) { el.select(); return { ok: true, detail: 'Selected all' }; }
+                document.execCommand && document.execCommand('selectAll');
+                return { ok: true, detail: 'Selected all' };
+            }
+            const codes = {
+                Enter: 13, Escape: 27, Tab: 9,
+                ArrowDown: 40, ArrowUp: 38, ArrowLeft: 37, ArrowRight: 39,
+                Backspace: 8, Delete: 46, Space: 32
+            };
             const keyCode = codes[key] || 13;
             ['keydown', 'keypress', 'keyup'].forEach(type => {
                 el.dispatchEvent(new KeyboardEvent(type, {
                     key,
-                    code: key,
+                    code: key.startsWith('Arrow') ? key : key,
                     keyCode,
                     which: keyCode,
                     bubbles: true,
                     cancelable: true
                 }));
             });
+            if (key === 'Enter') {
+                const form = el.form || el.closest('form');
+                if (form && typeof form.requestSubmit === 'function') {
+                    form.requestSubmit();
+                    return { ok: true, detail: 'Submitted form with Enter' };
+                }
+            }
+            if (key === 'Escape') {
+                el.blur && el.blur();
+            }
             return { ok: true, detail: 'Pressed ' + key };
         })();
         """
         return parseResult(try? await webView.evaluateJavaScript(script)) ?? (false, "Press failed")
     }
 
+    private static func scroll(_ action: [String: Any], on webView: WKWebView) async -> (success: Bool, detail: String) {
+        let direction = (action["value"] as? String ?? action["direction"] as? String ?? "down").lowercased()
+        let amount = action["amount"] as? Int ?? 500
+        let script = """
+        (function() {
+            const dir = \(jsStringLiteral(direction));
+            const px = \(amount);
+            if (dir === 'up') window.scrollBy(0, -px);
+            else if (dir === 'down') window.scrollBy(0, px);
+            else if (dir === 'top') window.scrollTo(0, 0);
+            else if (dir === 'bottom') window.scrollTo(0, document.body.scrollHeight);
+            else window.scrollBy(0, px);
+            return { ok: true, detail: 'Scrolled ' + dir };
+        })();
+        """
+        return parseResult(try? await webView.evaluateJavaScript(script)) ?? (false, "Scroll failed")
+    }
+
+    private static func selectOption(_ action: [String: Any], on webView: WKWebView) async -> (success: Bool, detail: String) {
+        let value = (action["value"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let ref = action["ref"] as? String ?? ""
+        await OpenHiveObservation.installAgentAutomation(on: webView)
+        let refJSON = jsStringLiteral(ref)
+        let valueJSON = jsStringLiteral(value)
+        let script = """
+        (function() {
+            let el = \(ref.isEmpty ? "null" : "window.__openhive_resolve_ref(\(refJSON))");
+            if (!el) el = document.querySelector('select');
+            if (!el || el.tagName !== 'SELECT') return { ok: false, error: 'no select element' };
+            el.value = \(valueJSON);
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            return { ok: true, detail: 'Selected ' + \(valueJSON) };
+        })();
+        """
+        return parseResult(try? await webView.evaluateJavaScript(script)) ?? (false, "Select failed")
+    }
+
     // MARK: - DOM helpers
 
     private static func clickByRef(_ ref: String, on webView: WKWebView) async -> (success: Bool, detail: String)? {
+        await OpenHiveObservation.installAgentAutomation(on: webView)
         let refJSON = jsStringLiteral(ref)
         let script = """
         (function() {
             const ref = \(refJSON);
-            const els = [...document.querySelectorAll('\(candidateSelector)')]
-                .filter(el => {
-                    const r = el.getBoundingClientRect();
-                    const t = (el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.textContent || '').trim();
-                    return r.width > 0 && r.height > 0 && !el.disabled && (t || el.tagName === 'INPUT' || el.tagName === 'TEXTAREA');
-                });
-            const idx = parseInt(ref.replace(/^e/, ''), 10);
-            const el = els[idx];
+            const el = window.__openhive_resolve_ref ? window.__openhive_resolve_ref(ref) : null;
             if (!el) return { ok: false, error: 'ref not found: ' + ref };
-            el.scrollIntoView({ block: 'center', inline: 'center' });
-            el.focus({ preventScroll: true });
-            const tag = el.tagName.toLowerCase();
-            const role = el.getAttribute('role') || '';
-            if (tag === 'input' || tag === 'textarea' || role === 'searchbox' || role === 'combobox' || el.isContentEditable) {
-                el.click();
-                return { ok: true, detail: 'Focused ' + ref };
+            return openhiveClick(el);
+
+            function openhiveClick(el) {
+                el.scrollIntoView({ block: 'center', inline: 'center' });
+                el.focus({ preventScroll: true });
+                const rect = el.getBoundingClientRect();
+                const cx = rect.left + rect.width / 2;
+                const cy = rect.top + rect.height / 2;
+                const opts = { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy };
+                ['pointerover','mouseover','mousemove','pointerdown','mousedown','pointerup','mouseup','click'].forEach(t => {
+                    try { el.dispatchEvent(new MouseEvent(t, opts)); } catch (_) {}
+                });
+                if (typeof el.click === 'function') el.click();
+                const tag = el.tagName.toLowerCase();
+                const role = el.getAttribute('role') || '';
+                const label = (el.innerText || el.getAttribute('aria-label') || el.textContent || '').trim().substring(0, 80);
+                if (tag === 'input' || tag === 'textarea' || role === 'searchbox' || role === 'combobox' || el.isContentEditable) {
+                    return { ok: true, detail: 'Focused ' + ref + (label ? ': ' + label : '') };
+                }
+                return { ok: true, detail: 'Clicked ' + ref + (label ? ': ' + label : '') };
             }
-            el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
-            el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
-            el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-            if (typeof el.click === 'function') el.click();
-            const label = (el.innerText || el.getAttribute('aria-label') || el.textContent || '').trim().substring(0, 80);
-            return { ok: true, detail: 'Clicked ' + ref + (label ? ': ' + label : '') };
         })();
         """
         return parseResult(try? await webView.evaluateJavaScript(script))
@@ -237,39 +316,44 @@ enum WebViewAutomation {
     }
 
     private static func fillRef(_ ref: String, value: String, on webView: WKWebView) async -> (success: Bool, detail: String)? {
+        await OpenHiveObservation.installAgentAutomation(on: webView)
         let refJSON = jsStringLiteral(ref)
         let valueJSON = jsStringLiteral(value)
         let script = """
         (function() {
-            const els = [...document.querySelectorAll('\(candidateSelector)')]
-                .filter(el => {
-                    const r = el.getBoundingClientRect();
-                    return r.width > 0 && r.height > 0 && !el.disabled;
-                });
-            const idx = parseInt(\(refJSON).replace(/^e/, ''), 10);
-            const el = els[idx];
+            const el = window.__openhive_resolve_ref ? window.__openhive_resolve_ref(\(refJSON)) : null;
             if (!el) return { ok: false, error: 'ref not found' };
             return fillElement(el, \(valueJSON));
-        })();
 
-        function fillElement(el, text) {
-            el.scrollIntoView({ block: 'center', inline: 'center' });
-            el.focus({ preventScroll: true });
-            el.click();
-            if (el.isContentEditable) {
-                el.textContent = text;
-            } else if ('value' in el) {
-                const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
-                    || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
-                if (setter) setter.call(el, text);
-                else el.value = text;
-            } else {
-                return { ok: false, error: 'not an input' };
+            function fillElement(el, text) {
+                el.scrollIntoView({ block: 'center', inline: 'center' });
+                el.focus({ preventScroll: true });
+                el.click();
+                if (el.isContentEditable) {
+                    el.textContent = '';
+                    for (const ch of text) {
+                        el.dispatchEvent(new InputEvent('beforeinput', { inputType: 'insertText', data: ch, bubbles: true, cancelable: true }));
+                        el.textContent += ch;
+                        el.dispatchEvent(new InputEvent('input', { inputType: 'insertText', data: ch, bubbles: true }));
+                    }
+                } else if ('value' in el) {
+                    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+                        || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+                    el.value = '';
+                    for (const ch of text) {
+                        const next = el.value + ch;
+                        if (setter) setter.call(el, next);
+                        else el.value = next;
+                        el.dispatchEvent(new InputEvent('beforeinput', { inputType: 'insertText', data: ch, bubbles: true, cancelable: true }));
+                        el.dispatchEvent(new InputEvent('input', { inputType: 'insertText', data: ch, bubbles: true }));
+                    }
+                } else {
+                    return { ok: false, error: 'not an input' };
+                }
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+                return { ok: true, detail: 'Typed into ' + \(refJSON) + ': ' + text.substring(0, 40) };
             }
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-            return { ok: true, detail: 'Typed into ' + \(refJSON) + ': ' + text.substring(0, 40) };
-        }
+        })();
         """
         return parseResult(try? await webView.evaluateJavaScript(script))
     }
@@ -299,6 +383,16 @@ enum WebViewAutomation {
             best.scrollIntoView({ block: 'center', inline: 'center' });
             best.focus({ preventScroll: true });
             best.click();
+            try { document.execCommand('selectAll'); } catch (e) {}
+            try { document.execCommand('delete'); } catch (e) {}
+            if (best.isContentEditable) {
+                best.textContent = '';
+            } else if ('value' in best) {
+                const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+                    || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+                if (setter) setter.call(best, '');
+                else best.value = '';
+            }
             const text = \(valueJSON);
             if (best.isContentEditable) best.textContent = text;
             else {
@@ -310,6 +404,37 @@ enum WebViewAutomation {
             best.dispatchEvent(new Event('input', { bubbles: true }));
             best.dispatchEvent(new Event('change', { bubbles: true }));
             return { ok: true, detail: 'Typed: ' + text.substring(0, 40) };
+        })();
+        """
+        return parseResult(try? await webView.evaluateJavaScript(script))
+    }
+
+    private static func clickByPartial(_ text: String, on webView: WKWebView) async -> (success: Bool, detail: String)? {
+        let textJSON = jsStringLiteral(text)
+        let script = """
+        (function() {
+            const query = \(textJSON).replace(/\\s+/g, ' ').trim().toLowerCase();
+            if (!query) return { ok: false, error: 'empty partial' };
+            const els = [...document.querySelectorAll('\(candidateSelector), [role=option], [role=listbox] *')]
+                .filter(el => {
+                    const r = el.getBoundingClientRect();
+                    return r.width > 0 && r.height > 0 && !el.disabled;
+                });
+            let best = null, bestScore = -1;
+            for (const el of els) {
+                const label = (el.innerText || el.value || el.getAttribute('aria-label') || el.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+                if (!label || label.length > 120) continue;
+                let score = -1;
+                if (label.includes(query)) score = 50 + query.length;
+                if (label === query) score = 100;
+                if (score > bestScore) { best = el; bestScore = score; }
+            }
+            if (!best || bestScore < 0) return { ok: false, error: 'partial not found: ' + query };
+            best.scrollIntoView({ block: 'center', inline: 'center' });
+            best.focus({ preventScroll: true });
+            best.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+            if (typeof best.click === 'function') best.click();
+            return { ok: true, detail: 'Clicked partial: ' + query };
         })();
         """
         return parseResult(try? await webView.evaluateJavaScript(script))
@@ -343,7 +468,7 @@ enum WebViewAutomation {
         return parseResult(try? await webView.evaluateJavaScript(script))
     }
 
-    private static func parseResult(_ raw: Any?) -> (success: Bool, detail: String)? {
+    static func parseResult(_ raw: Any?) -> (success: Bool, detail: String)? {
         guard let dict = raw as? [String: Any] else { return nil }
         if dict["ok"] as? Bool == true {
             return (true, dict["detail"] as? String ?? "OK")
@@ -354,7 +479,7 @@ enum WebViewAutomation {
         return nil
     }
 
-    private static func jsStringLiteral(_ value: String) -> String {
+    static func jsStringLiteral(_ value: String) -> String {
         if let data = try? JSONEncoder().encode(value),
            let str = String(data: data, encoding: .utf8) {
             return str

@@ -1,0 +1,6 @@
+.env
+.hud/
+__pycache__/
+*.pyc
+.telemetry/
+deploy.json

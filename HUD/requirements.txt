@@ -1,0 +1,2 @@
+hud-python>=0.6.6
+pydantic>=2.0

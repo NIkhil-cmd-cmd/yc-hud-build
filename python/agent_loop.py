@@ -34,7 +34,7 @@ class AgentTaskSession(TrajectorySession):
                     "type": "execute_started",
                     "backend": "webkit",
                     "workflowName": str(goal)[:80],
-                    "agentMode": "llm",
+                    "agentMode": "in-tab",
                 }
             )
 
@@ -73,6 +73,18 @@ class AgentTaskSession(TrajectorySession):
                 raw, meta = await choose_next_action(task, summary, candidates, history, step)
                 kind = raw.get("action") or raw.get("type") or "click"
 
+                usage = meta.get("usage") or {}
+                total_tokens = usage.get("total_tokens") or 0
+                if total_tokens:
+                    await self._send(
+                        {
+                            "type": "run_metric",
+                            "tokens": total_tokens,
+                            "tier": 3 if meta.get("source") == "llm" else 1,
+                            "elapsedMs": int((time.time() - t0) * 1000),
+                        }
+                    )
+
                 await self._send(
                     {
                         "type": "agent_step",
@@ -90,6 +102,10 @@ class AgentTaskSession(TrajectorySession):
                 if kind == "navigate":
                     url = raw.get("value") or raw.get("url") or ""
                     swift_action = {"type": "navigate", "url": url}
+                elif kind in {"search", "new_tab", "scroll", "select", "go_back", "go_forward", "reload", "switch_tab", "close_tab",
+                              "hover", "check", "uncheck", "dblclick", "double_click", "wait", "wait_for",
+                              "extract", "evaluate", "eval", "upload", "click_option", "scroll_into_view", "scrollintoview"}:
+                    swift_action = to_swift_action(raw, candidates)
                 else:
                     swift_action = to_swift_action(raw, candidates)
 

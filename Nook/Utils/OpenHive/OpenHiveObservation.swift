@@ -100,6 +100,74 @@ enum OpenHiveObservation {
         }
     }
 
+    /// Canonical candidate snapshot — same query/filter/index used for LLM refs and click/fill resolution.
+    static let agentCandidateQueryJS = """
+    (function(limit) {
+        limit = limit || 120;
+        return [...document.querySelectorAll('input, textarea, button, [role=button], [role=option], [role=gridcell], [role=menuitem], [aria-label], a')]
+            .map(function(el, idx) {
+                var rect = el.getBoundingClientRect();
+                var text = (el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.textContent || '').trim();
+                var tag = el.tagName.toLowerCase();
+                var ariaLabel = el.getAttribute('aria-label') || '';
+                var placeholder = el.getAttribute('placeholder') || '';
+                var name = el.getAttribute('name') || el.id || '';
+                var selector = '';
+                if (el.id) selector = '#' + CSS.escape(el.id);
+                else if (name) selector = tag + '[name="' + name.replace(/"/g, '\\\\"') + '"]';
+                else if (ariaLabel) selector = tag + '[aria-label="' + ariaLabel.replace(/"/g, '\\\\"') + '"]';
+                else if (placeholder) selector = tag + '[placeholder="' + placeholder.replace(/"/g, '\\\\"') + '"]';
+                return {
+                    ref: 'e' + idx,
+                    tag: tag,
+                    role: el.getAttribute('role') || tag,
+                    text: text,
+                    ariaLabel: ariaLabel,
+                    placeholder: placeholder,
+                    name: name,
+                    selector: selector,
+                    bbox: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+                    visible: rect.width > 0 && rect.height > 0,
+                    enabled: !el.disabled
+                };
+            })
+            .filter(function(e) { return e.visible && e.enabled && (e.text || e.ariaLabel || e.placeholder); })
+            .slice(0, limit)
+            .map(function(e, idx) { e.ref = 'e' + idx; return e; });
+    })
+    """
+
+    static let agentAutomationBootstrapJS = """
+    (function() {
+        if (window.__openhive_agent_query) return;
+        window.__openhive_agent_query = \(agentCandidateQueryJS);
+        window.__openhive_resolve_ref = function(ref) {
+            var idx = parseInt(String(ref).replace(/^@?e/i, ''), 10);
+            if (isNaN(idx)) return null;
+            var els = [...document.querySelectorAll('input, textarea, button, [role=button], [role=option], [role=gridcell], [role=menuitem], [aria-label], a')]
+                .filter(function(el) {
+                    var rect = el.getBoundingClientRect();
+                    var text = (el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.textContent || '').trim();
+                    return rect.width > 0 && rect.height > 0 && !el.disabled && (text || el.tagName === 'INPUT' || el.tagName === 'TEXTAREA');
+                });
+            return els[idx] || null;
+        };
+    })();
+    """
+
+    static func installAgentAutomation(on webView: WKWebView) async {
+        _ = try? await webView.evaluateJavaScript(agentAutomationBootstrapJS)
+    }
+
+    static func agentCandidates(from webView: WKWebView, limit: Int = 120) async -> [[String: Any]] {
+        let script = "window.__openhive_agent_query ? window.__openhive_agent_query(\(limit)) : (\(agentCandidateQueryJS))(\(limit));"
+        return await withCheckedContinuation { continuation in
+            webView.evaluateJavaScript(script) { result, _ in
+                continuation.resume(returning: result as? [[String: Any]] ?? [])
+            }
+        }
+    }
+
     static func interactiveSnapshot(from webView: WKWebView) async -> [[String: Any]] {
         let script = """
         (function() {

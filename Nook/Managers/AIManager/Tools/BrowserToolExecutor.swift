@@ -534,38 +534,9 @@ extension BrowserToolExecutor {
         }
     }
 
-    /// Candidate snapshot for Google Flights trajectories (matches python/smoke gate).
+    /// Candidate snapshot for agent trajectories — delegates to unified OpenHiveObservation query.
     static func trajectoryCandidates(from webView: WKWebView, limit: Int = 500) async -> [[String: Any]] {
-        let script = """
-        (function() {
-            const limit = \(limit);
-            return [...document.querySelectorAll('input, textarea, button, [role=button], [role=option], [role=gridcell], [role=menuitem], [aria-label], a')]
-                .map((el, idx) => {
-                    const rect = el.getBoundingClientRect();
-                    const text = (el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.textContent || '').trim();
-                    return {
-                        ref: `e${idx}`,
-                        tag: el.tagName.toLowerCase(),
-                        role: el.getAttribute('role') || el.tagName.toLowerCase(),
-                        text,
-                        ariaLabel: el.getAttribute('aria-label') || '',
-                        placeholder: el.getAttribute('placeholder') || '',
-                        bbox: {x: rect.x, y: rect.y, width: rect.width, height: rect.height},
-                        visible: rect.width > 0 && rect.height > 0,
-                        enabled: !el.disabled
-                    };
-                })
-                .filter(e => e.visible && e.enabled && (e.text || e.ariaLabel || e.placeholder))
-                .slice(0, limit)
-                .map((e, idx) => ({...e, ref: `e${idx}`}));
-        })();
-        """
-        do {
-            let result = try await webView.evaluateJavaScript(script)
-            return result as? [[String: Any]] ?? []
-        } catch {
-            return []
-        }
+        await OpenHiveObservation.agentCandidates(from: webView, limit: min(limit, 120))
     }
 
     static func pageText(from webView: WKWebView, limit: Int = 5000) async -> String {

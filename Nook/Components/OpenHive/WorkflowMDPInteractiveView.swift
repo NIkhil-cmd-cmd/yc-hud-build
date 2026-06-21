@@ -7,6 +7,7 @@ import SwiftUI
 
 struct WorkflowMDPInteractiveView: View {
     let graph: WorkflowMDPGraph
+    var liveStateId: String?
 
     @State private var selectedStateId: String?
     @State private var simulationIndex = 0
@@ -30,6 +31,9 @@ struct WorkflowMDPInteractiveView: View {
     }
 
     private var activeStateId: String? {
+        if let liveStateId, !liveStateId.isEmpty {
+            return liveStateId
+        }
         if isSimulating, simulationIndex < graph.path.count {
             return graph.path[simulationIndex]
         }
@@ -45,6 +49,11 @@ struct WorkflowMDPInteractiveView: View {
         }
         .onAppear {
             selectedStateId = graph.path.first
+        }
+        .onChange(of: liveStateId) { _, newId in
+            if let newId, !newId.isEmpty {
+                selectedStateId = newId
+            }
         }
     }
 

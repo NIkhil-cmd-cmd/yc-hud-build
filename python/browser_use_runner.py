@@ -37,7 +37,8 @@ Interaction rules:
 
 
 def browser_use_enabled() -> bool:
-    return os.environ.get("OPENHIVE_USE_BROWSER_USE", "1") != "0"
+    """External Playwright Chromium — opt-in only (OPENHIVE_USE_BROWSER_USE=1)."""
+    return os.environ.get("OPENHIVE_USE_BROWSER_USE", "0") == "1"
 
 
 def _headless() -> bool:
@@ -204,6 +205,7 @@ async def run_browser_use_task(
         task = f"First navigate to {start_url}. {task}"
 
     t0 = time.time()
+    await send({"type": "agent_progress", "message": "Starting browser-use agent…"})
     llm = _make_llm()
     model = _model()
     profile = _make_browser_profile(storage_state)
@@ -226,6 +228,8 @@ async def run_browser_use_task(
         nonlocal last_url
         last_url = getattr(state, "url", None) or last_url
         title = getattr(state, "title", None) or ""
+        elapsed_ms = int((time.time() - t0) * 1000)
+        est_tokens = step * 1400
         await send(
             {
                 "type": "agent_step",
@@ -236,6 +240,16 @@ async def run_browser_use_task(
                 "url": last_url,
                 "title": title,
                 "mirrorUrl": False,
+            }
+        )
+        await send(
+            {
+                "type": "run_metric",
+                "tokens": est_tokens,
+                "tier": 3,
+                "elapsedMs": elapsed_ms,
+                "runType": "agent",
+                "workflowName": task[:80],
             }
         )
 
@@ -287,6 +301,7 @@ async def run_browser_use_task(
 
         steps = step_count(history)
         elapsed = round(time.time() - t0, 1)
+        total_tokens = steps * 1400
 
         if not success and final_text:
             hay = final_text.lower()
@@ -300,6 +315,16 @@ async def run_browser_use_task(
             except Exception:
                 pass
 
+        await send(
+            {
+                "type": "run_metric",
+                "tokens": total_tokens,
+                "tier": 3,
+                "elapsedMs": int(elapsed * 1000),
+                "runType": "agent",
+                "workflowName": task[:80],
+            }
+        )
         await send(
             {
                 "type": "trajectory_complete",
