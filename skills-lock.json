@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "skills": {
+    "hud-environment-builder": {
+      "source": "docs.hud.ai",
+      "sourceType": "well-known",
+      "computedHash": "6fc341e31243ef9b374350695b3c0dc0eaf43848487841454dc84ee34d4a06e4"
+    }
+  }
+}
