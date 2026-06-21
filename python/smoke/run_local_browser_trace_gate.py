@@ -164,6 +164,7 @@ async def get_candidates(page: Page) -> list[dict[str, Any]]:
               role: el.getAttribute('role') || el.tagName.toLowerCase(),
               text,
               ariaLabel: el.getAttribute('aria-label'),
+              dataIso: el.getAttribute('data-iso'),
               placeholder: el.getAttribute('placeholder'),
               bbox: {x: rect.x, y: rect.y, width: rect.width, height: rect.height},
               visible: rect.width > 0 && rect.height > 0,
@@ -286,6 +287,27 @@ def find_day_candidate(candidates: list[dict[str, Any]], depart_date: str) -> di
     )
 
 
+def find_done_candidate(candidates: list[dict[str, Any]]) -> dict[str, Any] | None:
+    matches = [
+        candidate
+        for candidate in candidates
+        if candidate.get("role") != "search"
+        and (
+            candidate_text(candidate).strip() == "done"
+            or str(candidate.get("ariaLabel") or "").lower().startswith("done")
+        )
+    ]
+    if not matches:
+        return None
+    return min(
+        matches,
+        key=lambda candidate: (
+            candidate.get("bbox", {}).get("y", 0) < 650,
+            (candidate.get("bbox", {}).get("width", 9999) or 9999) * (candidate.get("bbox", {}).get("height", 9999) or 9999),
+        ),
+    )
+
+
 def scripted_action(task: dict[str, str], candidates: list[dict[str, Any]], history: list[dict[str, Any]]) -> dict[str, Any]:
     actions = [entry["action"] for entry in history]
     typed_origin = any(action.get("type") == "type" and action.get("value") == task["origin"] for action in actions)
@@ -295,7 +317,10 @@ def scripted_action(task: dict[str, str], candidates: list[dict[str, Any]], hist
     trip_type_set = any("one way" in text for text in selected_texts)
     origin_selected = any(task["origin"].lower() in text and "airport" in text for text in selected_texts)
     destination_selected = any(task["destination"].lower() in text and "airport" in text for text in selected_texts)
-    clicked_day = any(action.get("value") == task["departDate"] and action.get("type") == "click_date" for action in actions)
+    clicked_day = any(
+        action.get("value") == task["departDate"] and action.get("type") in {"click_date", "click_iso_date"}
+        for action in actions
+    )
     clicked_done = any(text.strip() == "done" for text in selected_texts)
     target_month = int(task["departDate"].split("-")[1])
     next_month_clicks = sum(1 for action in actions if action.get("type") == "next_month")
@@ -328,18 +353,10 @@ def scripted_action(task: dict[str, str], candidates: list[dict[str, Any]], hist
         return {"action": "click", "ref": departure["ref"], "value": None}
 
     if not clicked_day:
-        if target_month > 7 + next_month_clicks:
-            next_month = find_candidate(candidates, "next") or find_candidate(candidates, "next month")
-            if next_month:
-                return {"action": "next_month", "ref": next_month["ref"], "value": task["departDate"]}
-        day = find_day_candidate(candidates, task["departDate"])
-        if day:
-            return {"action": "click_date", "ref": day["ref"], "value": task["departDate"]}
-        departure_input = find_candidate(candidates, "departure") or candidates[0]
-        return {"action": "type", "ref": departure_input["ref"], "value": task["departDate"]}
+        return {"action": "click_iso_date", "ref": None, "value": task["departDate"]}
 
     if not clicked_done:
-        done = find_candidate(candidates, "done")
+        done = find_done_candidate(candidates)
         if done:
             return {"action": "click", "ref": done["ref"], "value": None}
         return {"action": "click_xy", "ref": None, "value": "Done", "x": 1078, "y": 770}
@@ -389,13 +406,17 @@ def ask_action(
 
 def validate_action(action: dict[str, Any], candidates: list[dict[str, Any]]) -> None:
     refs = {candidate["ref"] for candidate in candidates}
-    if action.get("action") not in {"click", "click_date", "next_month", "click_xy", "type", "press", "done"}:
+    if action.get("action") not in {"click", "click_date", "click_iso_date", "next_month", "click_xy", "type", "press", "done"}:
         raise ValueError(f"Invalid action type: {action.get('action')!r}")
     if action.get("action") in {"press", "done"}:
         return
-    if action.get("action") == "click_xy":
+    if action.get("action") == "click_iso_date":
+        if not isinstance(action.get("value"), str):
+            raise ValueError("click_iso_date requires date string value")
+        return
+    if action.get("action") == "click_xy" or (action.get("action") == "next_month" and action.get("ref") is None):
         if not isinstance(action.get("x"), (int, float)) or not isinstance(action.get("y"), (int, float)):
-            raise ValueError("click_xy requires numeric x/y")
+            raise ValueError(f"{action.get('action')} requires numeric x/y when ref is absent")
         return
     if action.get("ref") not in refs:
         raise ValueError(f"Invalid action ref: {action.get('ref')!r}")
@@ -413,7 +434,7 @@ async def click_or_type(page: Page, candidates: list[dict[str, Any]], action: di
             "text": str(action.get("value") or "Enter"),
             "bbox": {"x": 0, "y": 0, "width": 1, "height": 1},
         }
-    if action.get("action") == "click_xy":
+    if action.get("action") == "click_xy" or (action.get("action") == "next_month" and action.get("ref") is None):
         x = float(action["x"])
         y = float(action["y"])
         await page.mouse.click(x, y)
@@ -424,6 +445,27 @@ async def click_or_type(page: Page, candidates: list[dict[str, Any]], action: di
             "text": str(action.get("value") or "coordinate click"),
             "bbox": {"x": x - 1, "y": y - 1, "width": 2, "height": 2},
         }
+    if action.get("action") == "click_iso_date":
+        date_value = str(action["value"])
+        locator = page.locator(f'[data-iso="{date_value}"]').first
+        selected = await locator.evaluate(
+            """el => {
+              const rect = el.getBoundingClientRect();
+              const text = (el.innerText || el.getAttribute('aria-label') || el.textContent || '').trim();
+              return {
+                ref: null,
+                role: el.getAttribute('role') || el.tagName.toLowerCase(),
+                tag: el.tagName.toLowerCase(),
+                text,
+                ariaLabel: el.getAttribute('aria-label'),
+                dataIso: el.getAttribute('data-iso'),
+                bbox: {x: rect.x, y: rect.y, width: Math.max(1, rect.width), height: Math.max(1, rect.height)}
+              };
+            }"""
+        )
+        await locator.evaluate("el => el.click()")
+        await page.wait_for_timeout(1500)
+        return selected
     selected = next((c for c in candidates if c["ref"] == action.get("ref")), candidates[0])
     bbox = selected["bbox"]
     x = bbox["x"] + bbox["width"] / 2

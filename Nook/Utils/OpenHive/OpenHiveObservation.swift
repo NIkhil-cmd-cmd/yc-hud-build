@@ -4,6 +4,7 @@
 //
 
 import Foundation
+import AppKit
 import WebKit
 
 @MainActor
@@ -148,6 +149,49 @@ enum OpenHiveObservation {
     static func accessibilitySnapshot(from webView: WKWebView) async -> Any? {
         let elements = await interactiveSnapshot(from: webView)
         return ["elements": elements, "count": elements.count]
+    }
+
+    static func documentHTML(from webView: WKWebView) async -> String? {
+        await withCheckedContinuation { continuation in
+            webView.evaluateJavaScript("document.documentElement.outerHTML") { result, _ in
+                continuation.resume(returning: result as? String)
+            }
+        }
+    }
+
+    static func screenshotPath(from webView: WKWebView, identifier: String) async -> String? {
+        let config = WKSnapshotConfiguration()
+        config.rect = webView.bounds
+        config.afterScreenUpdates = true
+
+        return await withCheckedContinuation { continuation in
+            webView.takeSnapshot(with: config) { image, error in
+                guard let image,
+                      let tiff = image.tiffRepresentation,
+                      let bitmap = NSBitmapImageRep(data: tiff),
+                      let pngData = bitmap.representation(using: .png, properties: [:])
+                else {
+                    if let error {
+                        OpenHiveLogger.error("Observation", "snapshot_failed", data: ["error": error.localizedDescription])
+                    }
+                    continuation.resume(returning: nil)
+                    return
+                }
+
+                let previewDir = FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent("Library/Application Support/OpenHive/harvest/previews", isDirectory: true)
+                try? FileManager.default.createDirectory(at: previewDir, withIntermediateDirectories: true)
+                let fileName = "\(identifier)_\(Int(Date().timeIntervalSince1970)).png"
+                let path = previewDir.appendingPathComponent(fileName)
+                do {
+                    try pngData.write(to: path)
+                    continuation.resume(returning: path.path)
+                } catch {
+                    OpenHiveLogger.error("Observation", "snapshot_write_failed", data: ["error": error.localizedDescription])
+                    continuation.resume(returning: nil)
+                }
+            }
+        }
     }
 
     static func perform(action: [String: Any], on webView: WKWebView) async -> Bool {

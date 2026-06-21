@@ -125,9 +125,19 @@ def build_graph(harvests: list[dict]) -> nx.DiGraph:
             nid = _match_or_create_node(centroids, emb, url)
             if nid not in G:
                 G.add_node(nid, emb=emb, url=url, url_pattern=_url_pattern(url))
+            node = G.nodes[nid]
+            node["visits"] = node.get("visits", 0) + 1
+            if "sample_step" not in node:
+                preview = _step_preview(step)
+                node["sample_step"] = preview
+                node["sampleStep"] = preview
             action = step.get("action", {})
             if prev_nid is not None:
-                G.add_edge(prev_nid, nid, action=action, success=1)
+                if G.has_edge(prev_nid, nid):
+                    G[prev_nid][nid]["successes"] += 1
+                    G[prev_nid][nid]["weight"] = G[prev_nid][nid]["successes"]
+                else:
+                    G.add_edge(prev_nid, nid, action=action, successes=1, weight=1)
             prev_nid = nid
             node_id = max(node_id, nid + 1)
 
@@ -153,6 +163,34 @@ def _url_pattern(url: str) -> str:
 
     p = urlparse(url)
     return f"{p.netloc}{p.path.rstrip('/')}"
+
+
+def _step_preview(step: dict[str, Any]) -> dict[str, Any]:
+    action = step.get("action") or {}
+    artifacts = step.get("artifacts") or action.get("artifacts") or {}
+    dom_html = step.get("domHTML") or action.get("domHTML") or action.get("domHtml") or ""
+    snapshot_path = step.get("snapshotPath") or action.get("snapshotPath") or action.get("screenshotPath") or ""
+    preview = {
+        "stepIndex": step.get("stepIndex"),
+        "url": step.get("url", "") or action.get("url", ""),
+        "title": step.get("title", "") or action.get("title", ""),
+        "stateText": step.get("stateText", "") or action.get("stateText", ""),
+        "action": {
+            k: v
+            for k, v in action.items()
+            if k not in {"accessibilityTree", "domHTML", "domHtml", "snapshotPath", "screenshotPath", "artifacts"}
+        },
+        "selectedElement": step.get("selectedElement", {}),
+        "artifacts": artifacts,
+    }
+    if dom_html:
+        preview["domHTML"] = dom_html
+    if snapshot_path:
+        preview["snapshotPath"] = snapshot_path
+    for key in ("domHTML", "domHtml", "dom", "accessibility", "accessibilityTree"):
+        if key in step:
+            preview[key] = step[key]
+    return preview
 
 
 def value_iteration(G: nx.DiGraph, gamma: float = 0.95, max_iter: int = 20) -> dict:

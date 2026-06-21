@@ -1,13 +1,23 @@
 #!/usr/bin/env bash
+#
+# Start the OpenHive Python engine on localhost:8765
+#
+
 set -euo pipefail
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$ROOT"
-mkdir -p logs
-mkdir -p "$HOME/Library/Application Support/OpenHive/logs"
-if [[ ! -d .venv ]]; then
-  python3 -m venv .venv
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+
+cd "$ROOT_DIR"
+
+# Load environment
+if [ -f .env ]; then
+    export $(grep -v '^#' .env | xargs)
 fi
-source .venv/bin/activate
+if [ -d .venv ]; then
+    source .venv/bin/activate
+fi
+
 pip install -q -r python/requirements.txt 2>/dev/null || pip install -q websockets openai networkx pydantic exa-py "hud-python>=0.6.6" playwright "browser-use>=0.7"
 python -m playwright install chromium 2>/dev/null || playwright install chromium
 export OPENHIVE_USE_PLAYWRIGHT="${OPENHIVE_USE_PLAYWRIGHT:-0}"
@@ -25,7 +35,9 @@ if lsof -ti:"$PORT" >/dev/null 2>&1; then
   lsof -ti:"$PORT" | xargs kill -9 2>/dev/null || true
   sleep 0.5
 fi
-cd python
-echo "OpenHive engine → ws://127.0.0.1:${PORT}"
-echo "Logs → $ROOT/logs/engine.log"
-exec python engine.py
+
+echo "Starting OpenHive engine on ws://localhost:8765"
+echo "Waiting for Swift app to connect..."
+echo ""
+
+exec python python/engine.py

@@ -3128,6 +3128,12 @@ extension Tab: WKScriptMessageHandler {
                     payload["title"] = webView.title ?? ""
                     let tree = await OpenHiveObservation.accessibilitySnapshot(from: webView)
                     if let tree { payload["accessibilityTree"] = tree }
+                    if let domHTML = await OpenHiveObservation.documentHTML(from: webView) {
+                        payload["domHTML"] = domHTML
+                    }
+                    if let snapshotPath = await OpenHiveObservation.screenshotPath(from: webView, identifier: id.uuidString) {
+                        payload["snapshotPath"] = snapshotPath
+                    }
                 }
                 EngineBridge.shared.observeEvent(payload)
             }
