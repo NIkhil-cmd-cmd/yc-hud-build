@@ -190,7 +190,7 @@ struct WorkflowsPanelView: View {
         engine.connectionError = nil
         guard let tab = browserManager.currentTabForActiveWindow(),
               let windowId = browserManager.windowRegistry?.activeWindow?.id,
-              let webView = browserManager.getWebView(for: tab.id, in: windowId)
+              let webView = browserManager.ensureWebView(for: tab.id, in: windowId)
         else {
             workflows.lastError = "Select a tab first"
             return

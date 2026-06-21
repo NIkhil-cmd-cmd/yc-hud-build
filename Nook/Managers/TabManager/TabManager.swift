@@ -1345,6 +1345,9 @@ class TabManager: ObservableObject {
             browserManager: browserManager
         )
         newTab.profileId = profile.id
+        if newTab.showsOpenHiveAgentHome {
+            newTab.isOpenHiveNewTab = true
+        }
 
         // Add to window's ephemeral tabs (NOT to persistent tabs)
         windowState.ephemeralTabs.append(newTab)
@@ -2120,6 +2123,10 @@ class TabManager: ObservableObject {
         // Restore navigation state
         t.canGoBack = e.canGoBack
         t.canGoForward = e.canGoForward
+
+        if t.showsOpenHiveAgentHome {
+            t.isOpenHiveNewTab = true
+        }
 
         // Restore favicon from disk cache for instant display on startup
         t.restoreFaviconFromCache()

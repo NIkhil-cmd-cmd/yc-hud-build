@@ -53,6 +53,39 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
     var isPopupHost: Bool = false
     /// OpenHive new-tab page (Exa search) — no web load until user navigates.
     var isOpenHiveNewTab: Bool = false
+    /// When set, this tab renders the MDP workflow graph instead of a webview.
+    var openHiveGraphWorkflowId: String?
+    /// When true, this tab renders the hierarchical workflow catalog (Cmd+G).
+    var openHiveWorkflowCatalog: Bool = false
+
+    /// Whether this tab should render the agent landing instead of a webview.
+    var showsOpenHiveAgentHome: Bool {
+        if showsOpenHiveWorkflowCatalog || showsOpenHiveWorkflowGraph { return false }
+        if isOpenHiveNewTab { return true }
+        let run = TaskRunState.shared
+        if run.activeTabId == id {
+            switch run.phase {
+            case .running, .planning:
+                return false
+            default:
+                break
+            }
+            if EngineBridge.shared.isExecuting, run.phase != .matching {
+                return false
+            }
+        }
+        guard url.scheme == "about" else { return false }
+        let path = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return path.isEmpty || path == "blank" || path == "newtab"
+    }
+
+    var showsOpenHiveWorkflowCatalog: Bool {
+        openHiveWorkflowCatalog
+    }
+
+    var showsOpenHiveWorkflowGraph: Bool {
+        openHiveGraphWorkflowId != nil && !openHiveWorkflowCatalog
+    }
 
     // Track Option key state for Peek functionality
     var isOptionKeyDown: Bool = false
@@ -575,6 +608,8 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
     // MARK: - WebView Setup
 
     private func setupWebView() {
+        if showsOpenHiveWorkflowGraph { return }
+
         let resolvedProfile = resolveProfile()
         let configuration: WKWebViewConfiguration
         if let profile = resolvedProfile {
@@ -750,7 +785,7 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
         // For popup-hosting tabs, don't trigger an initial navigation. WebKit will
         // drive the load into this returned webView from createWebViewWith:.
         // Also don't reload if we're using an existing WebView (from Peek)
-        if !isPopupHost && !isOpenHiveNewTab && _existingWebView == nil {
+        if !isPopupHost && !isOpenHiveNewTab && !showsOpenHiveWorkflowGraph && _existingWebView == nil {
             loadURL(url)
         }
     }
@@ -3128,6 +3163,12 @@ extension Tab: WKScriptMessageHandler {
                     payload["title"] = webView.title ?? ""
                     let tree = await OpenHiveObservation.accessibilitySnapshot(from: webView)
                     if let tree { payload["accessibilityTree"] = tree }
+                    if let domHTML = await OpenHiveObservation.documentHTML(from: webView) {
+                        payload["domHTML"] = domHTML
+                    }
+                    if let snapshotPath = await OpenHiveObservation.screenshotPath(from: webView, identifier: id.uuidString) {
+                        payload["snapshotPath"] = snapshotPath
+                    }
                 }
                 EngineBridge.shared.observeEvent(payload)
             }

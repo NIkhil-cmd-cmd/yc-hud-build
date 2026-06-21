@@ -480,7 +480,7 @@ struct SpaceView: View {
 
     private var newTabButtonSection: some View {
         Button {
-            commandPalette.open()
+            browserManager.createNewTab(in: windowState)
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "plus")

@@ -13,6 +13,8 @@ struct TaskRunView: View {
     @Bindable private var runState = TaskRunState.shared
 
     @State private var mdpGraph: WorkflowMDPGraph?
+    @State private var selectedGraphStateId: String?
+    @State private var selectedGraphClusterId: Int?
     @State private var showBenchmark = false
     @State private var benchmark = HUDBenchmarkResult()
 
@@ -41,8 +43,22 @@ struct TaskRunView: View {
             }
 
             if let graph = mdpGraph {
-                WorkflowMDPInteractiveView(graph: graph, liveStateId: runState.liveStateId)
-                    .frame(maxHeight: .infinity)
+                WorkflowMDPInteractiveView(
+                    graph: graph,
+                    selectedStateId: $selectedGraphStateId,
+                    selectedClusterId: $selectedGraphClusterId
+                )
+                .frame(maxHeight: .infinity)
+                .onAppear {
+                    if selectedGraphStateId == nil {
+                        selectedGraphStateId = graph.path.first ?? graph.states.first?.id
+                    }
+                }
+                .onChange(of: runState.liveStateId) { _, newId in
+                    if let newId, !newId.isEmpty {
+                        selectedGraphStateId = newId
+                    }
+                }
             } else {
                 ContentUnavailableView(
                     "No MDP graph",
@@ -141,17 +157,15 @@ struct TaskRunView: View {
 
     private func loadMDPGraph() {
         guard let skillId = runState.skillId else { return }
-        let support = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/OpenHive/mdps/\(skillId).json")
-        let workflow = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/OpenHive/workflows/\(skillId).json")
-        let url = FileManager.default.fileExists(atPath: support.path) ? support : workflow
-        guard FileManager.default.fileExists(atPath: url.path),
-              let data = try? Data(contentsOf: url),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return }
-        if case .success(let graph) = WorkflowMDPParser.parse(json: json, workflowId: skillId) {
-            mdpGraph = graph
+        Task { @MainActor in
+            if case .success(let graph) = WorkflowMDPParser.load(workflowId: skillId) {
+                mdpGraph = graph
+                return
+            }
+            if let json = await EngineBridge.shared.fetchWorkflow(id: skillId),
+               case .success(let graph) = WorkflowMDPParser.parse(json: json, workflowId: skillId) {
+                mdpGraph = graph
+            }
         }
     }
 }

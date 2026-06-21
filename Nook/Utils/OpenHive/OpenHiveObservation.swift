@@ -3,6 +3,7 @@
 //  OpenHive — passive observation + browser action replay
 //
 
+import AppKit
 import Foundation
 import WebKit
 
@@ -100,56 +101,73 @@ enum OpenHiveObservation {
         }
     }
 
+    /// Single source of truth for which elements are addressable + their order.
+    /// BOTH the candidate snapshot (LLM @refs) and ref resolution (click/fill) MUST
+    /// use this identical collector so that `e5` in the candidate list is the exact
+    /// same DOM element as `e5` at resolution time. Any divergence makes every
+    /// click/type by ref miss, leaving only `navigate` working.
+    static let elementCollectorJS = """
+    (function() {
+        var SEL = 'input, textarea, select, button, [role=button], [role=option], [role=gridcell], [role=menuitem], [role=combobox], [role=searchbox], [role=link], [role=tab], [role=checkbox], [aria-label], a[href], [onclick], [contenteditable=true]';
+        var seen = new Set();
+        return [...document.querySelectorAll(SEL)].filter(function(el) {
+            if (seen.has(el)) return false;
+            seen.add(el);
+            var rect = el.getBoundingClientRect();
+            if (rect.width <= 0 || rect.height <= 0) return false;
+            if (el.disabled) return false;
+            var style = window.getComputedStyle(el);
+            if (style.visibility === 'hidden' || style.display === 'none' || parseFloat(style.opacity || '1') === 0) return false;
+            var tag = el.tagName;
+            var text = (el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.textContent || '').trim();
+            return !!(text || tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable);
+        });
+    })()
+    """
+
     /// Canonical candidate snapshot — same query/filter/index used for LLM refs and click/fill resolution.
     static let agentCandidateQueryJS = """
     (function(limit) {
         limit = limit || 120;
-        return [...document.querySelectorAll('input, textarea, button, [role=button], [role=option], [role=gridcell], [role=menuitem], [aria-label], a')]
-            .map(function(el, idx) {
-                var rect = el.getBoundingClientRect();
-                var text = (el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.textContent || '').trim();
-                var tag = el.tagName.toLowerCase();
-                var ariaLabel = el.getAttribute('aria-label') || '';
-                var placeholder = el.getAttribute('placeholder') || '';
-                var name = el.getAttribute('name') || el.id || '';
-                var selector = '';
-                if (el.id) selector = '#' + CSS.escape(el.id);
-                else if (name) selector = tag + '[name="' + name.replace(/"/g, '\\\\"') + '"]';
-                else if (ariaLabel) selector = tag + '[aria-label="' + ariaLabel.replace(/"/g, '\\\\"') + '"]';
-                else if (placeholder) selector = tag + '[placeholder="' + placeholder.replace(/"/g, '\\\\"') + '"]';
-                return {
-                    ref: 'e' + idx,
-                    tag: tag,
-                    role: el.getAttribute('role') || tag,
-                    text: text,
-                    ariaLabel: ariaLabel,
-                    placeholder: placeholder,
-                    name: name,
-                    selector: selector,
-                    bbox: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
-                    visible: rect.width > 0 && rect.height > 0,
-                    enabled: !el.disabled
-                };
-            })
-            .filter(function(e) { return e.visible && e.enabled && (e.text || e.ariaLabel || e.placeholder); })
-            .slice(0, limit)
-            .map(function(e, idx) { e.ref = 'e' + idx; return e; });
+        var els = \(elementCollectorJS);
+        return els.slice(0, limit).map(function(el, idx) {
+            var rect = el.getBoundingClientRect();
+            var text = (el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.textContent || '').trim();
+            var tag = el.tagName.toLowerCase();
+            var ariaLabel = el.getAttribute('aria-label') || '';
+            var placeholder = el.getAttribute('placeholder') || '';
+            var name = el.getAttribute('name') || el.id || '';
+            var selector = '';
+            if (el.id) selector = '#' + CSS.escape(el.id);
+            else if (name) selector = tag + '[name="' + name.replace(/"/g, '\\\\"') + '"]';
+            else if (ariaLabel) selector = tag + '[aria-label="' + ariaLabel.replace(/"/g, '\\\\"') + '"]';
+            else if (placeholder) selector = tag + '[placeholder="' + placeholder.replace(/"/g, '\\\\"') + '"]';
+            return {
+                ref: 'e' + idx,
+                tag: tag,
+                role: el.getAttribute('role') || tag,
+                text: text.slice(0, 200),
+                ariaLabel: ariaLabel,
+                placeholder: placeholder,
+                name: name,
+                selector: selector,
+                bbox: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+                visible: true,
+                enabled: !el.disabled
+            };
+        });
     })
     """
 
     static let agentAutomationBootstrapJS = """
     (function() {
-        if (window.__openhive_agent_query) return;
+        // Always (re)install so the resolver and query stay in lockstep, even if a
+        // prior/older version installed a divergent resolver on this context.
         window.__openhive_agent_query = \(agentCandidateQueryJS);
         window.__openhive_resolve_ref = function(ref) {
             var idx = parseInt(String(ref).replace(/^@?e/i, ''), 10);
             if (isNaN(idx)) return null;
-            var els = [...document.querySelectorAll('input, textarea, button, [role=button], [role=option], [role=gridcell], [role=menuitem], [aria-label], a')]
-                .filter(function(el) {
-                    var rect = el.getBoundingClientRect();
-                    var text = (el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.textContent || '').trim();
-                    return rect.width > 0 && rect.height > 0 && !el.disabled && (text || el.tagName === 'INPUT' || el.tagName === 'TEXTAREA');
-                });
+            var els = \(elementCollectorJS);
             return els[idx] || null;
         };
     })();
@@ -216,6 +234,49 @@ enum OpenHiveObservation {
     static func accessibilitySnapshot(from webView: WKWebView) async -> Any? {
         let elements = await interactiveSnapshot(from: webView)
         return ["elements": elements, "count": elements.count]
+    }
+
+    static func documentHTML(from webView: WKWebView) async -> String? {
+        await withCheckedContinuation { continuation in
+            webView.evaluateJavaScript("document.documentElement.outerHTML") { result, _ in
+                continuation.resume(returning: result as? String)
+            }
+        }
+    }
+
+    static func screenshotPath(from webView: WKWebView, identifier: String) async -> String? {
+        let config = WKSnapshotConfiguration()
+        config.rect = webView.bounds
+        config.afterScreenUpdates = true
+
+        return await withCheckedContinuation { continuation in
+            webView.takeSnapshot(with: config) { image, error in
+                guard let image,
+                      let tiff = image.tiffRepresentation,
+                      let bitmap = NSBitmapImageRep(data: tiff),
+                      let pngData = bitmap.representation(using: .png, properties: [:])
+                else {
+                    if let error {
+                        OpenHiveLogger.error("Observation", "snapshot_failed", data: ["error": error.localizedDescription])
+                    }
+                    continuation.resume(returning: nil)
+                    return
+                }
+
+                let previewDir = FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent("Library/Application Support/OpenHive/harvest/previews", isDirectory: true)
+                try? FileManager.default.createDirectory(at: previewDir, withIntermediateDirectories: true)
+                let fileName = "\(identifier)_\(Int(Date().timeIntervalSince1970)).png"
+                let path = previewDir.appendingPathComponent(fileName)
+                do {
+                    try pngData.write(to: path)
+                    continuation.resume(returning: path.path)
+                } catch {
+                    OpenHiveLogger.error("Observation", "snapshot_write_failed", data: ["error": error.localizedDescription])
+                    continuation.resume(returning: nil)
+                }
+            }
+        }
     }
 
     static func perform(action: [String: Any], on webView: WKWebView) async -> Bool {

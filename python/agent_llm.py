@@ -20,6 +20,7 @@ ALLOWED_ACTIONS = frozenset(
         "go_back", "go_forward", "reload",
         "hover", "check", "uncheck", "dblclick", "double_click",
         "wait", "wait_for", "extract", "evaluate", "eval", "upload",
+        "mcp_call",
     }
 )
 
@@ -38,9 +39,50 @@ def llm_available() -> bool:
     )
 
 
-def pick_llm_config() -> tuple[Any, str, str] | None:
+def pick_llm_config(
+    provider: str | None = None,
+    model: str | None = None,
+) -> tuple[Any, str, str] | None:
     """Return (async_client, model, provider_label) or None."""
     from openai import AsyncOpenAI
+
+    def _client(api_key: str, base_url: str | None = None) -> AsyncOpenAI:
+        if base_url:
+            return AsyncOpenAI(api_key=api_key, base_url=base_url)
+        return AsyncOpenAI(api_key=api_key)
+
+    if provider:
+        p = provider.strip().lower()
+        if p == "openai" and (key := os.getenv("OPENAI_API_KEY")):
+            m = model or os.getenv("OPENHIVE_AGENT_MODEL") or os.getenv("OPENAI_AGENT_MODEL") or "gpt-4o-mini"
+            return _client(key), m, "openai"
+        if p in ("openrouter", "claude", "deepseek", "llama", "gemini") and (key := os.getenv("OPENROUTER_API_KEY")):
+            defaults = {
+                "claude": "anthropic/claude-sonnet-4.5",
+                "deepseek": "deepseek/deepseek-chat-v3.1:free",
+                "llama": "meta-llama/llama-4-scout:free",
+                "gemini": "google/gemini-2.0-flash-001",
+                "openrouter": "openai/gpt-4o-mini",
+            }
+            m = model or defaults.get(p) or "openai/gpt-4o-mini"
+            return _client(key, "https://openrouter.ai/api/v1"), m, "openrouter"
+        if p == "minimax" and (key := os.getenv("MINIMAX_API_KEY")):
+            m = model or os.getenv("OPENHIVE_AGENT_MODEL") or "MiniMax-Text-01"
+            return _client(key, "https://api.minimaxi.chat/v1"), m, "minimax"
+        if p == "fireworks" and (key := os.getenv("FIREWORKS_API_KEY")):
+            m = model or os.getenv("OPENHIVE_AGENT_MODEL") or os.getenv("FIREWORKS_MODEL") or "accounts/fireworks/models/gpt-oss-120b"
+            return _client(key, "https://api.fireworks.ai/inference/v1"), m, "fireworks"
+        if p == "ollama":
+            host = (os.getenv("OLLAMA_HOST") or "http://localhost:11434").rstrip("/")
+            m = model or os.getenv("OPENHIVE_AGENT_MODEL") or "llama3.2"
+            return _client("ollama", f"{host}/v1"), m, "ollama"
+        if p == "exa":
+            if key := os.getenv("OPENAI_API_KEY"):
+                m = model or "gpt-4o-mini"
+                return _client(key), m, "exa"
+            if key := os.getenv("OPENROUTER_API_KEY"):
+                m = model or "openai/gpt-4o-mini"
+                return _client(key, "https://openrouter.ai/api/v1"), m, "exa"
 
     if key := os.getenv("OPENAI_API_KEY"):
         model = os.getenv("OPENHIVE_AGENT_MODEL") or os.getenv("OPENAI_AGENT_MODEL") or "gpt-4o-mini"
@@ -109,12 +151,29 @@ def _user_prompt(
             }
         )
 
+    mcp_tools = task.get("mcpTools") or []
+    mcp_block = ""
+    if mcp_tools:
+        compact_mcp = [
+            {
+                "name": t.get("name"),
+                "description": (t.get("description") or "")[:200],
+            }
+            for t in mcp_tools[:30]
+        ]
+        mcp_block = (
+            f"\nConnected app tools (use mcp_call when the task needs email, GitHub, Notion, etc.):\n"
+            f"{json.dumps(compact_mcp, default=str)[:4000]}\n"
+            '{"action":"mcp_call","server":"github","tool":"create_issue","arguments":{"title":"Bug","body":"..."}}\n'
+        )
+
     return (
         f"Task: {_task_prompt(task)}\n"
         f"Step: {step_index}\n"
         f"Current page:\n{json.dumps(summary, default=str)[:4000]}\n"
         f"Recent actions: {json.dumps(history[-8:], default=str)[:2000]}\n"
-        f"Interactive elements (use ref exactly as shown):\n{json.dumps(compact_candidates, default=str)[:8000]}\n\n"
+        f"Interactive elements (use ref exactly as shown):\n{json.dumps(compact_candidates, default=str)[:8000]}\n"
+        f"{mcp_block}\n"
         "Allowed action JSON shapes:\n"
         '{"action":"search","ref":null,"value":"your search query"}\n'
         '{"action":"navigate","ref":null,"value":"https://example.com"}\n'
@@ -171,8 +230,14 @@ def validate_action(action: dict[str, Any], candidates: list[dict[str, Any]]) ->
         "go_back", "go_forward", "reload", "switch_tab", "close_tab",
         "wait", "wait_for", "click_option", "evaluate", "eval", "upload",
         "hover", "check", "uncheck", "dblclick", "double_click",
-        "scroll_into_view", "scrollintoview", "extract",
+        "scroll_into_view", "scrollintoview", "extract", "mcp_call",
     }:
+        if kind == "mcp_call":
+            if not action.get("server") and not action.get("namespace"):
+                raise ValueError("mcp_call requires server namespace")
+            if not action.get("tool"):
+                raise ValueError("mcp_call requires tool name")
+            return
         if kind == "navigate":
             url = action.get("value") or action.get("url")
             if not url or not str(url).startswith("http"):
@@ -212,7 +277,9 @@ async def llm_next_action(
     step_index: int,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Call the best available LLM for the next browser action."""
-    cfg = pick_llm_config()
+    provider_override = task.get("agentProvider")
+    model_override = task.get("agentModel")
+    cfg = pick_llm_config(provider_override, model_override)
     if not cfg:
         raise RuntimeError("No LLM API key configured (set OPENAI_API_KEY, OPENROUTER_API_KEY, FIREWORKS_API_KEY, or MINIMAX_API_KEY)")
 
@@ -224,6 +291,16 @@ async def llm_next_action(
             "content": _user_prompt(task, summary, candidates, history, step_index),
         },
     ]
+
+    if provider == "exa" or provider_override == "exa":
+        goal = str(task.get("goal") or "").strip()
+        if step_index == 0 and goal:
+            from exa_client import exa_answer
+
+            exa_ctx = await exa_answer(goal)
+            if exa_ctx:
+                messages[1]["content"] += f"\n\nExa research context:\n{exa_ctx[:3000]}"
+        provider = "exa"
 
     kwargs: dict[str, Any] = {
         "model": model,

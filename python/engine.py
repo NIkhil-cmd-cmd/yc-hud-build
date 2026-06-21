@@ -40,7 +40,10 @@ _exec_meta: dict[str, dict[str, Any]] = {}
 _playwright_runners: dict[int, PlaywrightRunner] = {}
 _playwright_tasks: dict[int, asyncio.Task] = {}
 _trajectory_sessions: dict[int, Any] = {}
+_agent_prefs: dict[int, dict[str, str]] = {}
 _trajectory_tasks: dict[int, asyncio.Task] = {}
+_mcp_tools: dict[int, list[dict[str, Any]]] = {}
+MAX_WORKFLOW_STEPS = 50
 
 
 async def _finish_execution(
@@ -189,6 +192,19 @@ async def _schedule_agent_task(
     task = msg.get("task") if isinstance(msg.get("task"), dict) else {"goal": goal}
     if "goal" not in task:
         task["goal"] = goal
+    if msg.get("mcpTools"):
+        task["mcpTools"] = msg["mcpTools"]
+    elif conn_id in _mcp_tools:
+        task["mcpTools"] = _mcp_tools[conn_id]
+    prefs = _agent_prefs.get(conn_id, {})
+    if msg.get("agentProvider"):
+        task["agentProvider"] = msg["agentProvider"]
+        if msg.get("agentModel"):
+            task["agentModel"] = msg["agentModel"]
+    elif prefs.get("provider"):
+        task["agentProvider"] = prefs["provider"]
+        if prefs.get("model"):
+            task["agentModel"] = prefs["model"]
     send_fn = lambda payload: _send(ws, payload)
 
     async def _run_agent() -> None:
@@ -383,6 +399,30 @@ def _summarize(msg: dict[str, Any]) -> dict[str, Any]:
         else:
             out[k] = v
     return out
+
+
+def _infer_workflow_category(workflow_id: str, name: str) -> str:
+    """Best-effort category for legacy recorded workflows."""
+    if workflow_id.startswith("wf_"):
+        return "recorded"
+    text = f"{workflow_id} {name}".lower()
+    rules: list[tuple[str, tuple[str, ...]]] = [
+        ("travel", ("flight", "booking", "hotel", "flights")),
+        ("search", ("search", "google", "duckduckgo", "youtube")),
+        ("dev", ("github", "stackoverflow", "npm", "pypi", "mdn", "crates")),
+        ("shopping", ("amazon", "shop")),
+        ("news", ("hacker", "reddit", "product hunt", "hn")),
+        ("local", ("maps", "yelp", "weather")),
+        ("jobs", ("linkedin", "jobs")),
+        ("reference", ("wiki", "wikipedia")),
+        ("research", ("arxiv", "scholar")),
+        ("video", ("youtube",)),
+        ("entertainment", ("imdb", "spotify")),
+    ]
+    for category, keywords in rules:
+        if any(k in text for k in keywords):
+            return category
+    return "other"
 
 
 def _load_workflow(workflow_id: str) -> dict | None:
@@ -758,7 +798,7 @@ async def _dispatch_message(
                         url=url[:80],
                         workflow_id=meta.get("workflowId"),
                     )
-                    if meta["steps"] > 25:
+                    if meta["steps"] > MAX_WORKFLOW_STEPS:
                         await _finish_execution(ws, conn_id, meta, executor, reason="max_steps")
                         return session_id
 
@@ -1061,16 +1101,57 @@ async def _dispatch_message(
                 case "list_workflows":
                     workflows = []
                     for p in sorted(WORKFLOW_DIR.glob("*.json")):
+                        if p.name.endswith("_policy.json"):
+                            continue
                         data = json.loads(p.read_text())
+                        wid = data.get("id", p.stem)
+                        actions = data.get("actions") or []
+                        steps = data.get("steps") or len(actions) or 0
+                        category = data.get("category") or _infer_workflow_category(wid, data.get("name", p.stem))
                         workflows.append(
                             {
-                                "id": data.get("id", p.stem),
+                                "id": wid,
                                 "name": data.get("name", p.stem),
-                                "steps": data.get("steps", 0),
+                                "steps": steps,
+                                "category": category,
+                                "tags": data.get("tags") or [],
+                                "seeded": bool(data.get("seeded")),
                             }
                         )
                     log_event(log, "list_workflows", count=len(workflows))
                     await _send(ws, {"type": "workflows_list", "workflows": workflows})
+
+                case "get_workflow":
+                    workflow_id = msg.get("workflowId") or msg.get("workflow_id")
+                    request_id = msg.get("requestId")
+                    wf = _load_workflow(workflow_id) if workflow_id else None
+                    await _send(
+                        ws,
+                        {
+                            "type": "workflow_loaded",
+                            "requestId": request_id,
+                            "workflowId": workflow_id,
+                            "workflow": wf,
+                            "error": None if wf else f"workflow not found: {workflow_id}",
+                        },
+                    )
+
+                case "set_agent_model":
+                    provider = msg.get("provider") or msg.get("agentProvider")
+                    model = msg.get("model") or msg.get("agentModel")
+                    if provider:
+                        _agent_prefs[conn_id] = {
+                            "provider": str(provider),
+                            "model": str(model or ""),
+                        }
+                    await _send(
+                        ws,
+                        {
+                            "type": "agent_model_set",
+                            "provider": provider,
+                            "model": model,
+                        },
+                    )
 
                 case "delete_all_workflows":
                     deleted = 0
@@ -1096,6 +1177,12 @@ async def _dispatch_message(
                         }
                     )
                     await _send(ws, {"type": "token_metrics", "metrics": data})
+
+                case "mcp_tools_updated":
+                    tools = msg.get("tools") or []
+                    if isinstance(tools, list):
+                        _mcp_tools[conn_id] = [t for t in tools if isinstance(t, dict)]
+                    log_event(log, "mcp_tools_updated", count=len(_mcp_tools.get(conn_id, [])))
 
                 case "metric":
                     _append_token_metric(msg)

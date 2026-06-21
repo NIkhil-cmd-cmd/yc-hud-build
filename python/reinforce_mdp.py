@@ -37,14 +37,17 @@ async def reinforce_skill(
     }
 
     harvests = [{"harvest": harvest_steps, "success": success}]
+    history = list(mdp.get("harvestHistory") or [])
     if mdp.get("actions"):
-        # Rebuild from combined: existing linear actions + new harvest
         existing_buffer = _actions_to_buffer(mdp.get("actions", []))
-        combined = existing_buffer + harvest_steps
-        harvests = [{"harvest": combined, "success": success}]
+        if existing_buffer:
+            history.append({"harvest": existing_buffer, "success": True, "version": mdp.get("version", 0)})
+    history.append({"harvest": harvest_steps, "success": success, "version": int(mdp.get("version", 0)) + 1})
+    harvests = history
 
     G = build_graph(harvests)
     policy = value_iteration(G)
+    transitions = export_transitions(G, policy)
     nodes: dict[str, Any] = {}
     for n in G.nodes():
         nodes[str(n)] = dict(G.nodes[n])
@@ -60,11 +63,13 @@ async def reinforce_skill(
         {
             "policy": policy,
             "policyNodes": build_policy_nodes(harvests),
+            "transitions": transitions,
             "nodes": nodes,
             "actions": new_actions,
             "steps": len(new_actions),
             "version": int(mdp.get("version", 0)) + 1,
             "reinforcementCount": int(mdp.get("reinforcementCount", 0)) + 1,
+            "harvestHistory": history[-12:],
             "updatedAt": time.time(),
         }
     )

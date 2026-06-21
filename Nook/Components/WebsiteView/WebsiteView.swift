@@ -204,7 +204,14 @@ struct WebsiteView: View {
         let _ = windowState.compositorVersion
         ZStack() {
             Group {
-                if let tab = browserManager.currentTab(for: windowState), tab.isOpenHiveNewTab {
+                if let tab = browserManager.currentTab(for: windowState), tab.showsOpenHiveWorkflowCatalog {
+                    WorkflowCatalogView()
+                        .environmentObject(browserManager)
+                        .environment(windowState)
+                } else if let tab = browserManager.currentTab(for: windowState), tab.showsOpenHiveWorkflowGraph,
+                   let workflowId = tab.openHiveGraphWorkflowId {
+                    WorkflowGraphView(workflowId: workflowId)
+                } else if let tab = browserManager.currentTab(for: windowState), tab.showsOpenHiveAgentHome {
                     AgentHomeView()
                         .environmentObject(browserManager)
                         .environment(windowState)

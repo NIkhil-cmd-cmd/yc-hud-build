@@ -169,12 +169,19 @@ struct WorkflowMDPInteractiveView: View {
                     control2: CGPoint(x: midX, y: end.y)
                 )
                 let highlighted = isHighlighted(edge)
+                let color: Color = highlighted
+                    ? .orange
+                    : (edge.isPrimary ? .orange.opacity(0.85) : .secondary.opacity(0.35 + edge.weight * 0.25))
                 context.stroke(
                     path,
-                    with: .color(highlighted ? .orange : .secondary.opacity(0.55)),
-                    style: StrokeStyle(lineWidth: highlighted ? 3 : 1.5, lineCap: .round)
+                    with: .color(color),
+                    style: StrokeStyle(
+                        lineWidth: highlighted ? 3 : (edge.isPrimary ? 2.2 : 1.2),
+                        lineCap: .round,
+                        dash: edge.isPrimary ? [] : [5, 4]
+                    )
                 )
-                drawArrow(context: &context, at: end, from: start, color: highlighted ? .orange : .secondary.opacity(0.55))
+                drawArrow(context: &context, at: end, from: start, color: color)
             }
         }
     }
@@ -186,10 +193,10 @@ struct WorkflowMDPInteractiveView: View {
                 let end = CGPoint(x: to.x, y: to.y + nodeSize.height / 2)
                 let midX = (start.x + end.x) / 2
                 let midY = (start.y + end.y) / 2
-                let label = "\(edge.label)  w:\(String(format: "%.2f", edge.weight))"
+                let label = "\(edge.label)  w:\(String(format: "%.2f", edge.weight))\(edge.isPrimary ? "" : " · stale")"
                 Text(label)
                     .font(.system(size: 9, weight: .medium, design: .monospaced))
-                    .foregroundStyle(isHighlighted(edge) ? .orange : .secondary)
+                    .foregroundStyle(isHighlighted(edge) ? .orange : (edge.isPrimary ? .primary : .secondary))
                     .padding(.horizontal, 6)
                     .padding(.vertical, 3)
                     .background(.thinMaterial, in: Capsule())

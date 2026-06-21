@@ -83,6 +83,14 @@ def to_swift_action(action: dict[str, Any], candidates: list[dict[str, Any]]) ->
     if kind == "press":
         return {"type": "press", "value": action.get("value") or "Enter"}
 
+    if kind == "mcp_call":
+        return {
+            "type": "mcp_call",
+            "server": action.get("server") or action.get("namespace") or "",
+            "tool": action.get("tool") or "",
+            "arguments": action.get("arguments") or action.get("args") or {},
+        }
+
     if kind == "done":
         return {"type": "done"}
 
@@ -148,6 +156,8 @@ class TrajectorySession:
             "title": msg.get("title", ""),
             "text": msg.get("pageText", ""),
             "candidates": candidates,
+            "lastActionOk": msg.get("lastActionOk"),
+            "lastActionDetail": msg.get("lastActionDetail"),
         }
         self._state_event.set()
         return True
@@ -175,16 +185,49 @@ class TrajectorySession:
             }
         )
 
-    async def _step_delay(self, task: dict[str, str], swift_action: dict[str, Any]) -> None:
+    def _run_mode(self, task: dict[str, str]) -> str:
+        if task.get("flightDemoReplay"):
+            return "replay"
         if task.get("flightDemoLearn"):
-            base = 2.8 if swift_action.get("type") == "navigate" else 2.2
+            return "learning"
+        return "trajectory"
+
+    def _history_selected_text(
+        self,
+        raw: dict[str, Any],
+        swift_action: dict[str, Any],
+        candidates: list[dict[str, Any]],
+    ) -> str:
+        ref = raw.get("ref")
+        if ref:
+            candidate = next((c for c in candidates if c.get("ref") == ref), None)
+            if candidate:
+                label = (
+                    candidate.get("text")
+                    or candidate.get("ariaLabel")
+                    or candidate.get("placeholder")
+                    or ""
+                )
+                if label:
+                    return str(label)
+        return str(raw.get("value") or swift_action.get("text") or "")
+
+    async def _step_delay(self, task: dict[str, str], swift_action: dict[str, Any]) -> None:
+        kind = swift_action.get("type")
+        if task.get("flightDemoReplay"):
+            await asyncio.sleep(1.0 if kind == "navigate" else 0.4)
+            return
+        if task.get("flightDemoLearn"):
+            base = 2.5 if kind == "navigate" else 1.8
             await asyncio.sleep(base)
             return
-        await asyncio.sleep(1.0 if swift_action.get("type") == "navigate" else 0.8)
+        await asyncio.sleep(1.0 if kind == "navigate" else 0.8)
 
     def _state_timeout(self, task: dict[str, str]) -> float:
         if task.get("flightDemoLearn"):
             return 60.0
+        if task.get("flightDemoReplay"):
+            return 35.0
         return 25.0
 
     async def _pick_action(
@@ -195,191 +238,40 @@ class TrajectorySession:
         history: list[dict[str, Any]],
         step: int,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
-        if task.get("flightDemoLearn") or (task.get("origin") and task.get("destination")):
+        if (
+            task.get("flightDemoLearn")
+            or task.get("flightDemoReplay")
+            or (task.get("origin") and task.get("destination"))
+        ):
             raw = scripted_action(task, candidates, history)
             return raw, {"source": "scripted", "model": "scripted-google-flights-expert"}
         return await choose_next_action(task, summary, candidates, history, step)
 
-    async def _settle_after_action(self, action: dict[str, Any], *, fast: bool) -> dict[str, Any]:
-        """Wait for Swift to finish the action and report page state."""
-        kind = action.get("type")
-        if kind == "navigate":
-            await asyncio.sleep(6.0 if fast else 10.0)
-        elif kind == "type":
-            await asyncio.sleep(2.2 if fast else 3.5)
-        elif kind == "press":
-            await asyncio.sleep(0.3 if fast else 0.5)
-        else:
-            await asyncio.sleep(1.2 if fast else 2.5)
-        try:
-            return await self._wait_state(timeout=10.0 if fast else 18.0)
-        except asyncio.TimeoutError:
-            return dict(self._last_state)
+    async def run(self, task: dict[str, str], *, max_steps: int = 12) -> dict[str, Any]:
+        from flight_demo import DEMO_SKILL_ID
 
-    async def _run_flight_demo_scripted(self, task: dict[str, str]) -> dict[str, Any]:
-        """Reliable hardcoded flight demo — no execute_state round-trips between steps."""
-        from flight_demo import DEMO_SKILL_ID, install_hardcoded_skill, scripted_swift_actions
-
-        fast = bool(task.get("flightDemoReplay"))
-        learn = bool(task.get("flightDemoLearn"))
-        actions = scripted_swift_actions(task)
         origin = task.get("origin", "BOS")
         destination = task.get("destination", "SFO")
-
-        self._running = True
-        self._state_event.clear()
-        t0 = time.time()
-        steps_run = 0
-        last_summary: dict[str, Any] = {}
-
-        try:
-            await self._send(
-                {
-                    "type": "execute_started",
-                    "backend": "webkit",
-                    "workflowName": f"{origin}→{destination}",
-                    "skillId": DEMO_SKILL_ID if fast else None,
-                }
-            )
-
-            total = len(actions)
-            for idx, action in enumerate(actions):
-                steps_run = idx + 1
-                mode = "replay" if fast else "learning"
-                label = action.get("type", "step")
-                if action.get("type") == "type":
-                    label = f"type {action.get('value', '')}"
-                elif action.get("text"):
-                    label = f"{action.get('type')}: {action.get('text')}"
-
-                await self._send(
-                    {
-                        "type": "agent_step",
-                        "step": steps_run,
-                        "provider": "scripted",
-                        "model": "flight-demo",
-                        "action": label,
-                        "mode": mode,
-                    }
-                )
-                await self._send(
-                    {
-                        "type": "mdp_step",
-                        "skillId": DEMO_SKILL_ID,
-                        "stateId": str(idx),
-                        "nextStateId": str(idx + 1),
-                        "action": action.get("type", ""),
-                        "tier": 1,
-                        "step": steps_run,
-                        "total": total,
-                    }
-                )
-                await self._send(
-                    {
-                        "type": "execute_action",
-                        "backend": "webkit",
-                        "action": action,
-                        "step": steps_run,
-                        "total": total,
-                        "tier": 1,
-                        "mode": mode,
-                    }
-                )
-
-                last_summary = await self._settle_after_action(action, fast=fast)
-                if reached_results(last_summary):
-                    break
-
-                elapsed_ms = int((time.time() - t0) * 1000)
-                await self._send(
-                    {
-                        "type": "run_metric",
-                        "tokens": 0 if fast else 120,
-                        "tier": 1,
-                        "elapsedMs": elapsed_ms,
-                        "runType": "agent" if learn else "execute",
-                        "workflowName": f"{origin}→{destination}",
-                    }
-                )
-
-            # Allow final page load after Search click
-            await asyncio.sleep(2.0 if fast else 4.0)
-            try:
-                last_summary = await self._wait_state(timeout=8.0 if fast else 12.0)
-            except asyncio.TimeoutError:
-                pass
-
-            summary = {
-                "url": last_summary.get("url", self._last_state.get("url", "")),
-                "title": last_summary.get("title", self._last_state.get("title", "")),
-                "text": last_summary.get("text", self._last_state.get("text", "")),
-            }
-
-            success = (
-                reached_results(summary)
-                or "/travel/flights/search" in summary.get("url", "")
-                or steps_run >= total
-            )
-
-            if learn:
-                skill_id = await install_hardcoded_skill()
-                await self._send(
-                    {
-                        "type": "flight_demo_saved",
-                        "skillId": skill_id,
-                        "message": "Flight workflow learned — run again for fast MDP replay",
-                    }
-                )
-
-            elapsed = round(time.time() - t0, 1)
-            await self._send(
-                {
-                    "type": "trajectory_complete",
-                    "success": success,
-                    "steps": steps_run,
-                    "finalUrl": summary.get("url", ""),
-                    "reason": "results_detected" if success else "script_finished",
-                    "elapsedSec": elapsed,
-                    "flightDemoLearn": learn,
-                    "flightDemoReplay": fast,
-                }
-            )
-            await self._send({"type": "execute_done", "hudStatus": "ok" if success else "partial"})
-            return {
-                "success": success,
-                "steps": steps_run,
-                "finalUrl": summary.get("url", ""),
-                "elapsedSec": elapsed,
-            }
-        except Exception as exc:
-            await self._send({"type": "error", "message": str(exc)[:200]})
-            await self._send({"type": "execute_done", "hudStatus": "partial"})
-            return {"success": False, "error": str(exc), "steps": steps_run}
-        finally:
-            self._running = False
-
-    async def run(self, task: dict[str, str], *, max_steps: int = 12) -> dict[str, Any]:
-        if task.get("flightDemoLearn") or task.get("flightDemoReplay"):
-            return await self._run_flight_demo_scripted(task)
-
-        origin = task["origin"]
-        destination = task["destination"]
-        depart_date = task["departDate"]
-        if task.get("flightDemoLearn"):
+        is_flight_demo = bool(task.get("flightDemoLearn") or task.get("flightDemoReplay"))
+        if is_flight_demo:
             max_steps = max(max_steps, 24)
         state_timeout = self._state_timeout(task)
+        run_mode = self._run_mode(task)
         self._running = True
+        self._state_event.clear()
         history: list[dict[str, Any]] = []
         t0 = time.time()
 
         try:
-            await self._send(
-                {
-                    "type": "execute_started",
-                    "backend": "webkit",
-                    "workflowName": f"{origin}→{destination}",
-                }
-            )
+            started: dict[str, Any] = {
+                "type": "execute_started",
+                "backend": "webkit",
+                "workflowName": f"{origin}→{destination}",
+            }
+            if task.get("flightDemoReplay"):
+                started["skillId"] = DEMO_SKILL_ID
+            await self._send(started)
+
             await self._send(
                 {
                     "type": "execute_action",
@@ -392,7 +284,12 @@ class TrajectorySession:
                     "total": max_steps,
                 }
             )
-            await asyncio.sleep(8 if task.get("flightDemoLearn") else 4)
+            if task.get("flightDemoReplay"):
+                await asyncio.sleep(2.0)
+            elif task.get("flightDemoLearn"):
+                await asyncio.sleep(4.0)
+            else:
+                await asyncio.sleep(4.0)
             state = await self._wait_state(timeout=state_timeout)
 
             for step in range(max_steps):
@@ -414,6 +311,7 @@ class TrajectorySession:
                             "reason": "results_detected",
                             "elapsedSec": elapsed,
                             "flightDemoLearn": bool(task.get("flightDemoLearn")),
+                            "flightDemoReplay": bool(task.get("flightDemoReplay")),
                         }
                     )
                     await self._send({"type": "execute_done", "hudStatus": "ok"})
@@ -435,9 +333,22 @@ class TrajectorySession:
                         "model": meta.get("model"),
                         "action": kind,
                         "ref": raw.get("ref"),
-                        "mode": "learning" if task.get("flightDemoLearn") else "trajectory",
+                        "mode": run_mode,
                     }
                 )
+                if is_flight_demo:
+                    await self._send(
+                        {
+                            "type": "mdp_step",
+                            "skillId": DEMO_SKILL_ID,
+                            "stateId": str(step),
+                            "nextStateId": str(step + 1),
+                            "action": kind,
+                            "tier": 1,
+                            "step": step + 1,
+                            "total": max_steps,
+                        }
+                    )
 
                 if kind == "done":
                     elapsed = round(time.time() - t0, 1)
@@ -451,6 +362,7 @@ class TrajectorySession:
                             "reason": "agent_done",
                             "elapsedSec": elapsed,
                             "flightDemoLearn": bool(task.get("flightDemoLearn")),
+                            "flightDemoReplay": bool(task.get("flightDemoReplay")),
                         }
                     )
                     await self._send({"type": "execute_done", "hudStatus": "ok"})
@@ -465,23 +377,37 @@ class TrajectorySession:
                         "step": step + 1,
                         "total": max_steps,
                         "tier": 3 if meta.get("source") == "llm" else 1,
-                        "mode": meta.get("source", "trajectory"),
+                        "mode": meta.get("source", run_mode),
                     }
                 )
 
                 await self._step_delay(task, swift_action)
                 state = await self._wait_state(timeout=state_timeout)
-                stored = dict(raw)
-                if stored.get("action") and not stored.get("type"):
-                    stored["type"] = stored["action"]
-                history.append(
-                    {
-                        "action": stored,
-                        "provider": meta.get("source"),
-                        "selectedText": raw.get("value") or swift_action.get("text") or "",
-                        "url": state.get("url", ""),
-                    }
-                )
+                if state.get("lastActionOk") is not False:
+                    stored = dict(raw)
+                    if stored.get("action") and not stored.get("type"):
+                        stored["type"] = stored["action"]
+                    history.append(
+                        {
+                            "action": stored,
+                            "provider": meta.get("source"),
+                            "selectedText": self._history_selected_text(raw, swift_action, candidates),
+                            "url": state.get("url", ""),
+                        }
+                    )
+
+                if is_flight_demo:
+                    elapsed_ms = int((time.time() - t0) * 1000)
+                    await self._send(
+                        {
+                            "type": "run_metric",
+                            "tokens": 0 if task.get("flightDemoReplay") else 120,
+                            "tier": 1,
+                            "elapsedMs": elapsed_ms,
+                            "runType": "execute" if task.get("flightDemoReplay") else "agent",
+                            "workflowName": f"{origin}→{destination}",
+                        }
+                    )
 
             elapsed = round(time.time() - t0, 1)
             success = reached_results(
@@ -501,6 +427,7 @@ class TrajectorySession:
                     "reason": "results_detected" if success else "max_steps",
                     "elapsedSec": elapsed,
                     "flightDemoLearn": bool(task.get("flightDemoLearn")),
+                    "flightDemoReplay": bool(task.get("flightDemoReplay")),
                 }
             )
             await self._send({"type": "execute_done", "hudStatus": "ok" if success else "partial"})

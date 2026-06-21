@@ -14,6 +14,7 @@ class MCPManager {
     private static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "Nook", category: "MCPManager")
 
     private var clients: [String: MCPClient] = [:]
+    private var configsById: [String: MCPServerConfig] = [:]
     private(set) var connectionStates: [String: MCPConnectionState] = [:]
     private(set) var allTools: [MCPTool] = []
 
@@ -53,6 +54,7 @@ class MCPManager {
     // MARK: - Server Management
 
     func connectServer(_ config: MCPServerConfig) {
+        configsById[config.id] = config
         let client = MCPClient(serverConfig: config)
         clients[config.id] = client
         connectionStates[config.id] = .connecting
@@ -95,6 +97,7 @@ class MCPManager {
         guard let client = clients[serverId] else { return }
         await client.disconnect()
         clients.removeValue(forKey: serverId)
+        configsById.removeValue(forKey: serverId)
         connectionStates[serverId] = .disconnected
         refreshTools()
     }
@@ -106,6 +109,40 @@ class MCPManager {
             throw MCPClientError.notConnected
         }
         return try await client.callTool(name: name, arguments: arguments)
+    }
+
+    func callTool(namespace: String, name: String, arguments: [String: Any]) async throws -> String {
+        guard let serverId = serverId(forNamespace: namespace) else {
+            throw MCPClientError.serverError("MCP server not connected: \(namespace)")
+        }
+        return try await callTool(serverId: serverId, name: name, arguments: arguments)
+    }
+
+    func serverId(forNamespace namespace: String) -> String? {
+        for (id, config) in configsById where config.toolNamespace == namespace {
+            if connectionStates[id]?.isConnected == true {
+                return id
+            }
+        }
+        return nil
+    }
+
+    func config(forNamespace namespace: String, configs: [MCPServerConfig]) -> MCPServerConfig? {
+        configs.first { $0.toolNamespace == namespace }
+    }
+
+    /// JSON payload for OpenHive engine / agent loop.
+    func exportToolsPayload() -> [[String: Any]] {
+        allTools.map { tool in
+            [
+                "name": tool.qualifiedName,
+                "namespace": tool.serverNamespace,
+                "tool": tool.name,
+                "serverId": tool.serverId,
+                "description": tool.description,
+                "inputSchema": tool.inputSchema,
+            ]
+        }
     }
 
     // MARK: - Tool Discovery
@@ -123,6 +160,7 @@ class MCPManager {
                 tools.append(contentsOf: clientTools)
             }
             allTools = tools
+            EngineBridge.shared.syncMcpTools(from: self)
         }
     }
 

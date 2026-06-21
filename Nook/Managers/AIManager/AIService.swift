@@ -303,15 +303,19 @@ class AIService {
             }
         }
 
-        // Check if it's an MCP tool
+        // MCP tools — namespace.tool, e.g. github.create_issue
         if let mcpManager = mcpManager,
            toolCall.name.contains(".") {
             let parts = toolCall.name.split(separator: ".", maxSplits: 1)
             if parts.count == 2 {
-                let serverId = String(parts[0])
+                let namespace = String(parts[0])
                 let toolName = String(parts[1])
                 do {
-                    let result = try await mcpManager.callTool(serverId: serverId, name: toolName, arguments: toolCall.arguments)
+                    let result = try await mcpManager.callTool(
+                        namespace: namespace,
+                        name: toolName,
+                        arguments: toolCall.arguments
+                    )
                     return AIToolResult(toolCallId: toolCall.id, toolName: toolCall.name, content: result)
                 } catch {
                     return AIToolResult(toolCallId: toolCall.id, toolName: toolCall.name, content: "MCP Error: \(error.localizedDescription)", isError: true)

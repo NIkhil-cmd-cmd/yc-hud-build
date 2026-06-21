@@ -7,6 +7,7 @@ import SwiftUI
 
 struct WorkflowGraphView: View {
     let workflowId: String
+    var onBack: (() -> Void)? = nil
 
     @State private var workflowName = ""
     @State private var steps: [WorkflowStep] = []
@@ -109,6 +110,13 @@ struct WorkflowGraphView: View {
 
     private var header: some View {
         HStack(alignment: .center, spacing: 12) {
+            if let onBack {
+                Button(action: onBack) {
+                    Label("Catalog", systemImage: "chevron.left")
+                }
+                .buttonStyle(.borderless)
+            }
+
             Image(systemName: "point.3.connected.trianglepath.dotted")
                 .font(.system(size: 22, weight: .semibold))
                 .foregroundStyle(.tint)
@@ -207,24 +215,56 @@ struct WorkflowGraphView: View {
     }
 
     private func loadGraph() {
+        Task { await loadGraphAsync() }
+    }
+
+    @MainActor
+    private func loadGraphAsync() async {
+        var timelineJSON: [String: Any]?
+
         switch WorkflowMDPParser.load(workflowId: workflowId) {
         case .success(let graph):
-            mdpGraph = graph
-            workflowName = graph.workflowName
-            loadError = nil
-            selectedStateId = graph.path.first ?? graph.states.first?.id
-            selectedClusterId = selectedStateId.flatMap { graph.stateMap[$0]?.cluster?.id }
-        case .failure(let error):
-            mdpGraph = nil
-            loadError = error.localizedDescription
+            applyGraph(graph)
+            timelineJSON = WorkflowMDPParser.loadJSON(workflowId: workflowId)
+        case .failure:
+            if let json = await EngineBridge.shared.fetchWorkflow(id: workflowId) {
+                switch WorkflowMDPParser.parse(json: json, workflowId: workflowId) {
+                case .success(let graph):
+                    applyGraph(graph)
+                    timelineJSON = json
+                case .failure(let error):
+                    mdpGraph = nil
+                    loadError = error.localizedDescription
+                    return
+                }
+            } else {
+                mdpGraph = nil
+                loadError = EngineBridge.shared.isConnected
+                    ? "Could not load workflow “\(workflowId)”"
+                    : "Could not load workflow “\(workflowId)” — start the engine with ./scripts/start_engine.sh"
+                return
+            }
         }
 
-        let support = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/OpenHive/workflows/\(workflowId).json")
-        guard let data = try? Data(contentsOf: support),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return }
+        if timelineJSON == nil {
+            timelineJSON = await EngineBridge.shared.fetchWorkflow(id: workflowId)
+        }
+        if let timelineJSON {
+            applyTimeline(from: timelineJSON)
+        }
+    }
 
+    @MainActor
+    private func applyGraph(_ graph: WorkflowMDPGraph) {
+        mdpGraph = graph
+        workflowName = graph.workflowName
+        loadError = nil
+        selectedStateId = graph.path.first ?? graph.states.first?.id
+        selectedClusterId = selectedStateId.flatMap { graph.stateMap[$0]?.cluster?.id }
+    }
+
+    @MainActor
+    private func applyTimeline(from json: [String: Any]) {
         if workflowName.isEmpty {
             workflowName = json["name"] as? String ?? workflowId
         }

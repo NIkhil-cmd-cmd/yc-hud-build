@@ -120,12 +120,14 @@ final class WorkflowManager {
         case .run(let workflowId, let workflowName):
             guard let browserManager, let windowState,
                   let tab = browserManager.currentTab(for: windowState),
-                  let webView = tab.assignedWebView else {
+                  let webView = browserManager.ensureWebView(for: tab.id, in: windowState.id)
+            else {
                 lastError = "Select a tab first"
                 Self.postToast(lastError ?? "", isError: true)
                 browserManager?.showWorkflowStatus(in: windowState)
                 return true
             }
+            tab.isOpenHiveNewTab = false
             execute(
                 workflowId: workflowId,
                 webView: webView,
@@ -216,6 +218,39 @@ final class WorkflowManager {
         }
         lastError = nil
         EngineBridge.shared.deleteAllWorkflows()
+    }
+
+    @discardableResult
+    func openWorkflowGraph(in windowState: BrowserWindowState? = nil, browserManager: BrowserManager? = nil) -> Bool {
+        guard let browserManager else {
+            lastError = "Browser unavailable"
+            Self.postToast(lastError ?? "", isError: true)
+            return false
+        }
+
+        guard let windowState = windowState ?? browserManager.windowRegistry?.activeWindow else {
+            lastError = "No active window"
+            Self.postToast(lastError ?? "", isError: true)
+            return false
+        }
+
+        let targetSpace =
+            windowState.currentSpaceId.flatMap { id in
+                browserManager.tabManager.spaces.first(where: { $0.id == id })
+            }
+            ?? windowState.currentProfileId.flatMap { pid in
+                browserManager.tabManager.spaces.first(where: { $0.profileId == pid })
+            }
+        let tab = browserManager.tabManager.createNewTab(url: "about:blank", in: targetSpace)
+        tab.isOpenHiveNewTab = false
+        tab.openHiveWorkflowCatalog = true
+        tab.openHiveGraphWorkflowId = nil
+        tab.name = "Workflows"
+        browserManager.selectTab(tab, in: windowState)
+        EngineBridge.shared.refreshWorkflows()
+        compileMessage = "Opened workflow catalog"
+        Self.postToast(compileMessage ?? "")
+        return true
     }
 
     func onWorkflowsDeleted(count: Int) {

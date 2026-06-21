@@ -15,7 +15,7 @@ class KeyboardShortcutManager {
     private let userDefaults = UserDefaults.standard
     private let shortcutsKey = "keyboard.shortcuts"
     private let shortcutsVersionKey = "keyboard.shortcuts.version"
-    private let currentVersion = 5 // Increment when adding new shortcuts
+    private let currentVersion = 6 // Increment when adding new shortcuts
 
     /// Hash-based storage for O(1) lookup: ["cmd+t": KeyboardShortcut]
     private var shortcutMap: [String: KeyboardShortcut] = [:]
@@ -457,7 +457,9 @@ class KeyboardShortcutManager {
 
             // Tab Management
             case .newTab:
-                self.windowRegistry?.activeWindow?.commandPalette?.open()
+                if let windowState = self.windowRegistry?.activeWindow {
+                    browserManager.createNewTab(in: windowState)
+                }
             case .closeTab:
                 browserManager.closeCurrentTab()
             case .undoCloseTab:
@@ -541,6 +543,8 @@ class KeyboardShortcutManager {
             case .saveWorkflow:
                 WorkflowManager.shared.saveCurrentSession(name: "Saved workflow")
                 browserManager.showWorkflowStatus()
+            case .openWorkflowGraph:
+                _ = WorkflowManager.shared.openWorkflowGraph(browserManager: browserManager)
             }
         }
     }

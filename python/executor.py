@@ -166,7 +166,7 @@ class PolicyExecutor:
         self.tokens = 0
         self.tier_log: list[int] = []
         self.step_index = 0
-        self.replay_index = 0
+        self._replay_cursor = 0
         self.current_node: str | None = None
         self.last_state_id: str | None = None
         self.mdp_path: list[str] = []
@@ -183,26 +183,32 @@ class PolicyExecutor:
         last_action_ok: bool | None = None,
     ) -> dict[str, Any]:
         """Return next action for Swift to perform on WKWebView."""
+        candidates = _extract_candidates(accessibility_tree)
+
+        if last_action_ok is True:
+            self._replay_cursor += 1
+
         # Tier 1 — replay recorded actions in order (primary path)
-        while self.replay_index < len(self.ordered_actions):
-            action = self._templatize(dict(self.ordered_actions[self.replay_index]))
-            self.replay_index += 1
+        while self._replay_cursor < len(self.ordered_actions):
+            action = self._templatize(dict(self.ordered_actions[self._replay_cursor]))
             if action.get("type") == "navigate" and action.get("url") and url:
                 if self._same_page(action["url"], url):
+                    self._replay_cursor += 1
                     continue
+            enriched = _enrich_stored_action(action, candidates)
             self.tier_log.append(1)
             self.step_index += 1
-            state_id = str(self.replay_index - 1)
-            next_state_id = str(self.replay_index)
+            state_id = str(self._replay_cursor)
+            next_state_id = str(self._replay_cursor + 1)
             self.last_state_id = next_state_id
             self.mdp_path.append(next_state_id)
             return {
                 "done": False,
                 "tier": 1,
                 "tokens": self.tokens,
-                "action": action,
+                "action": enriched,
                 "mode": "replay",
-                "step": self.replay_index,
+                "step": self._replay_cursor + 1,
                 "total": len(self.ordered_actions),
                 "stateId": state_id,
                 "nextStateId": next_state_id,
@@ -216,7 +222,6 @@ class PolicyExecutor:
             return {"done": True, "tier": 0, "tokens": self.tokens, "reason": "max_steps"}
 
         state_emb = await embed_state(url, title, accessibility_tree)
-        candidates = _extract_candidates(accessibility_tree)
 
         # T1 — policy node match (embedding + element geometry)
         t1 = await self._tier1_policy_action(state_emb, url, candidates)
@@ -401,6 +406,45 @@ def _action_from_ref(action: dict, candidates: list[dict]) -> dict | None:
         out["text"] = action["text"]
     elif action.get("selector"):
         out["selector"] = action["selector"]
+    return out
+
+
+def _enrich_stored_action(stored: dict, candidates: list[dict]) -> dict:
+    """Attach live refs/coordinates from the current page for reliable replay."""
+    out = dict(stored)
+    ref = stored.get("ref", "")
+    if ref:
+        selected = next((c for c in candidates if c.get("ref") == ref), None)
+        if selected:
+            out["ref"] = ref
+            out["text"] = selected.get("text") or selected.get("ariaLabel") or out.get("text", "")
+            out["selector"] = selected.get("selector") or out.get("selector", "")
+            out["name"] = selected.get("name") or out.get("name", "")
+            bbox = selected.get("bbox") or {}
+            w, h = bbox.get("width") or 0, bbox.get("height") or 0
+            if w > 0 and h > 0:
+                out["x"] = bbox.get("x", 0) + w / 2
+                out["y"] = bbox.get("y", 0) + h / 2
+            return out
+
+    # Fallback: match by stored label/selector on the live page
+    needle = (stored.get("text") or stored.get("name") or "").strip().lower()
+    if needle:
+        for candidate in candidates:
+            label = " ".join(
+                str(candidate.get(k) or "")
+                for k in ("text", "ariaLabel", "placeholder", "name")
+            ).lower()
+            if needle in label or label in needle:
+                out["ref"] = candidate.get("ref", "")
+                out["text"] = candidate.get("text") or candidate.get("ariaLabel") or needle
+                out["selector"] = candidate.get("selector") or out.get("selector", "")
+                bbox = candidate.get("bbox") or {}
+                w, h = bbox.get("width") or 0, bbox.get("height") or 0
+                if w > 0 and h > 0:
+                    out["x"] = bbox.get("x", 0) + w / 2
+                    out["y"] = bbox.get("y", 0) + h / 2
+                break
     return out
 
 

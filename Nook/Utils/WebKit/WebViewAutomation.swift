@@ -79,55 +79,72 @@ enum WebViewAutomation {
     }
 
     private static func click(_ action: [String: Any], on webView: WKWebView) async -> (success: Bool, detail: String) {
+        await OpenHiveObservation.installAgentAutomation(on: webView)
+        // Cascade through strategies: a strategy only "wins" if it actually
+        // succeeded. A failed ref/label/selector lookup must fall through to the
+        // next strategy instead of short-circuiting the whole click.
+        var lastDetail = "No clickable element found"
+
         if action["partial"] as? Bool == true,
            let text = action["text"] as? String, !text.isEmpty,
            let result = await clickByPartial(text, on: webView) {
-            return result
+            if result.success { return result }
+            lastDetail = result.detail
         }
 
         if let ref = action["ref"] as? String, !ref.isEmpty,
            let result = await clickByRef(ref, on: webView) {
-            return result
+            if result.success { return result }
+            lastDetail = result.detail
         }
 
         if let x = action["x"] as? Double, let y = action["y"] as? Double,
            let result = await clickAtPoint(x: x, y: y, on: webView) {
-            return result
+            if result.success { return result }
+            lastDetail = result.detail
         }
 
         let text = (action["text"] as? String ?? action["name"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if !text.isEmpty, let result = await clickByLabel(text, on: webView) {
-            return result
+            if result.success { return result }
+            lastDetail = result.detail
         }
 
         let selector = (action["selector"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if !selector.isEmpty, let result = await clickBySelector(selector, hint: text, on: webView) {
-            return result
+            if result.success { return result }
+            lastDetail = result.detail
         }
 
-        return (false, "No clickable element found")
+        return (false, lastDetail)
     }
 
     private static func typeText(_ action: [String: Any], on webView: WKWebView) async -> (success: Bool, detail: String) {
+        await OpenHiveObservation.installAgentAutomation(on: webView)
+
         let value = (action["value"] as? String ?? action["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return (false, "Empty type value") }
+        var lastDetail = "No input found"
 
         if let ref = action["ref"] as? String, !ref.isEmpty,
            let result = await fillRef(ref, value: value, on: webView) {
-            return result
+            if result.success { return result }
+            lastDetail = result.detail
         }
 
         let label = (action["text"] as? String ?? action["placeholder"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if !label.isEmpty, let result = await fillByLabel(label, value: value, on: webView) {
-            return result
+            if result.success { return result }
+            lastDetail = result.detail
         }
 
         if let x = action["x"] as? Double, let y = action["y"] as? Double,
            let result = await fillAtPoint(x: x, y: y, value: value, on: webView) {
-            return result
+            if result.success { return result }
+            lastDetail = result.detail
         }
 
-        return (false, "No input found")
+        return (false, lastDetail)
     }
 
     private static func pressKey(_ action: [String: Any], on webView: WKWebView) async -> (success: Bool, detail: String) {
@@ -271,6 +288,32 @@ enum WebViewAutomation {
         (function() {
             const query = \(textJSON).replace(/\\s+/g, ' ').trim().toLowerCase();
             if (!query) return { ok: false, error: 'empty label' };
+
+            function labelOf(el) {
+                return (el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.innerText || el.value || el.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+            }
+
+            function clickEl(el) {
+                const input = el.matches('input, textarea') ? el : el.querySelector('input, textarea, [contenteditable=true]');
+                const target = input || el;
+                target.scrollIntoView({ block: 'center', inline: 'center' });
+                target.focus({ preventScroll: true });
+                ['pointerdown','mousedown','pointerup','mouseup','click'].forEach(t => {
+                    try { target.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window })); } catch (_) {}
+                });
+                if (typeof target.click === 'function') target.click();
+                return target;
+            }
+
+            const combos = [...document.querySelectorAll('[role=combobox], [role=searchbox]')];
+            for (const el of combos) {
+                const label = labelOf(el);
+                if (label.includes(query) || query.includes(label)) {
+                    clickEl(el);
+                    return { ok: true, detail: 'Focused combobox: ' + query };
+                }
+            }
+
             const els = [...document.querySelectorAll('\(candidateSelector)')]
                 .filter(el => {
                     const r = el.getBoundingClientRect();
@@ -278,20 +321,17 @@ enum WebViewAutomation {
                 });
             let best = null, bestScore = -1;
             for (const el of els) {
-                const label = (el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+                const label = labelOf(el);
                 if (!label) continue;
                 let score = -1;
                 if (label === query) score = 100;
-                else if (label.startsWith(query.slice(0, 48))) score = 80;
-                else if (query.length > 8 && label.includes(query.slice(0, 20))) score = 60;
-                else if (label.includes(query)) score = 40;
+                else if (label.startsWith(query)) score = 85;
+                else if (label.includes(query)) score = 60;
+                else if (query.includes(label) && label.length > 2) score = 50;
                 if (score > bestScore) { best = el; bestScore = score; }
             }
-            if (!best || bestScore < 0) return { ok: false, error: 'label not found' };
-            best.scrollIntoView({ block: 'center', inline: 'center' });
-            best.focus({ preventScroll: true });
-            best.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-            if (typeof best.click === 'function') best.click();
+            if (!best || bestScore < 0) return { ok: false, error: 'label not found: ' + query };
+            clickEl(best);
             return { ok: true, detail: 'Clicked: ' + query.substring(0, 60) };
         })();
         """
@@ -364,7 +404,7 @@ enum WebViewAutomation {
         let script = """
         (function() {
             const needle = \(labelJSON).toLowerCase();
-            const inputs = [...document.querySelectorAll('input, textarea, [role=searchbox], [role=combobox], [contenteditable=true]')]
+            const inputs = [...document.querySelectorAll('input, textarea, [role=searchbox], [role=combobox] input, [contenteditable=true]')]
                 .filter(el => {
                     const r = el.getBoundingClientRect();
                     return r.width > 0 && r.height > 0 && !el.disabled;
@@ -374,34 +414,37 @@ enum WebViewAutomation {
                 const t = (el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('name') || el.id || '').toLowerCase();
                 let score = -1;
                 if (t.includes(needle) || needle.includes(t)) score = 60;
-                if (t.includes('from') && needle.includes('from')) score = 80;
-                if (t.includes('to') && needle.includes('to')) score = 80;
+                if (t.includes('from') && needle.includes('from')) score = 90;
+                if (t.includes('to') && needle.includes('to')) score = 90;
                 if (score > bestScore) { best = el; bestScore = score; }
             }
-            if (!best) best = inputs[0];
-            if (!best) return { ok: false, error: 'no input' };
+            if (!best) return { ok: false, error: 'no input for ' + needle };
             best.scrollIntoView({ block: 'center', inline: 'center' });
             best.focus({ preventScroll: true });
             best.click();
             try { document.execCommand('selectAll'); } catch (e) {}
             try { document.execCommand('delete'); } catch (e) {}
+            const text = \(valueJSON);
             if (best.isContentEditable) {
                 best.textContent = '';
+                for (const ch of text) {
+                    best.dispatchEvent(new InputEvent('beforeinput', { inputType: 'insertText', data: ch, bubbles: true, cancelable: true }));
+                    best.textContent += ch;
+                    best.dispatchEvent(new InputEvent('input', { inputType: 'insertText', data: ch, bubbles: true }));
+                }
             } else if ('value' in best) {
                 const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
                     || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
-                if (setter) setter.call(best, '');
-                else best.value = '';
+                for (const ch of text) {
+                    const next = (best.value || '') + ch;
+                    if (setter) setter.call(best, next);
+                    else best.value = next;
+                    best.dispatchEvent(new InputEvent('beforeinput', { inputType: 'insertText', data: ch, bubbles: true, cancelable: true }));
+                    best.dispatchEvent(new InputEvent('input', { inputType: 'insertText', data: ch, bubbles: true }));
+                }
+            } else {
+                return { ok: false, error: 'not an input' };
             }
-            const text = \(valueJSON);
-            if (best.isContentEditable) best.textContent = text;
-            else {
-                const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
-                    || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
-                if (setter) setter.call(best, text);
-                else best.value = text;
-            }
-            best.dispatchEvent(new Event('input', { bubbles: true }));
             best.dispatchEvent(new Event('change', { bubbles: true }));
             return { ok: true, detail: 'Typed: ' + text.substring(0, 40) };
         })();
@@ -415,6 +458,29 @@ enum WebViewAutomation {
         (function() {
             const query = \(textJSON).replace(/\\s+/g, ' ').trim().toLowerCase();
             if (!query) return { ok: false, error: 'empty partial' };
+
+            const isDay = /^\\d{1,2}$/.test(query);
+            if (isDay) {
+                const cells = [...document.querySelectorAll('[role=gridcell], button, div[role=button]')]
+                    .filter(el => {
+                        const r = el.getBoundingClientRect();
+                        if (r.width <= 0 || r.height <= 0 || el.disabled) return false;
+                        const label = (el.getAttribute('aria-label') || el.innerText || el.textContent || '')
+                            .replace(/\\s+/g, ' ').trim().toLowerCase();
+                        if (!label) return false;
+                        return label === query || label.startsWith(query + ' ') || label.startsWith(query + '\\n');
+                    })
+                    .filter(el => el.getBoundingClientRect().y > 260);
+                if (cells.length) {
+                    const best = cells.sort((a, b) => b.getBoundingClientRect().x - a.getBoundingClientRect().x)[0];
+                    best.scrollIntoView({ block: 'center', inline: 'center' });
+                    best.focus({ preventScroll: true });
+                    best.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+                    if (typeof best.click === 'function') best.click();
+                    return { ok: true, detail: 'Clicked calendar day: ' + query };
+                }
+            }
+
             const els = [...document.querySelectorAll('\(candidateSelector), [role=option], [role=listbox] *')]
                 .filter(el => {
                     const r = el.getBoundingClientRect();

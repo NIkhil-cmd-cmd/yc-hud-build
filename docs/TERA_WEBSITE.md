@@ -2,6 +2,20 @@
 
 Marketing site for **Tera browser**. Implements the Midu-structure plan with an editorial earth/nature aesthetic. The macOS app remains branded OpenHive internally until a future rebrand.
 
+## Stack
+
+Vite + React with real shader libraries:
+
+| Library | Use |
+|---------|-----|
+| [@shadergradient/react](https://github.com/ruucm/shadergradient) | Hero + testimonials WebGL gradient (grain on) |
+| [@paper-design/shaders-react](https://www.npmjs.com/package/@paper-design/shaders-react) | LiquidMetal logo, GrainGradient card art |
+| SVG feTurbulence + feDisplacementMap | Liquid glass nav, cards, pricing |
+
+```bash
+cd website/tera && npm install && npm run dev
+```
+
 ## Live site
 
 **Production:** https://tera-zeta-ten.vercel.app

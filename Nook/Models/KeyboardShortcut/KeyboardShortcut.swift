@@ -92,6 +92,7 @@ enum ShortcutAction: String, CaseIterable, Hashable, Codable {
     case createBoost = "create_boost"                          // Cmd+Shift+B
     case organizeTabs = "organize_tabs"                        // Cmd+Shift+Option+O
     case saveWorkflow = "save_workflow"                        // Cmd+Shift+S
+    case openWorkflowGraph = "open_workflow_graph"             // Cmd+G
 
     var displayName: String {
         switch self {
@@ -142,6 +143,7 @@ enum ShortcutAction: String, CaseIterable, Hashable, Codable {
         case .createBoost: return "Create Boost"
         case .organizeTabs: return "Organize Tabs"
         case .saveWorkflow: return "Save Workflow"
+        case .openWorkflowGraph: return "Browse Workflows"
         }
     }
 
@@ -179,7 +181,7 @@ enum ShortcutAction: String, CaseIterable, Hashable, Codable {
             return .spaces
         case .createBoost:
             return .tools
-        case .organizeTabs, .saveWorkflow:
+        case .organizeTabs, .saveWorkflow, .openWorkflowGraph:
             return .tools
         }
     }
@@ -361,7 +363,8 @@ extension KeyboardShortcut {
             KeyboardShortcut(action: .customizeSpaceGradient, keyCombination: KeyCombination(key: "g", modifiers: [.command, .shift])),
             KeyboardShortcut(action: .createBoost, keyCombination: KeyCombination(key: "b", modifiers: [.command, .shift])),
             KeyboardShortcut(action: .organizeTabs, keyCombination: KeyCombination(key: "o", modifiers: [.command, .shift, .option])),
-            KeyboardShortcut(action: .saveWorkflow, keyCombination: KeyCombination(key: "s", modifiers: [.command, .shift]))
+            KeyboardShortcut(action: .saveWorkflow, keyCombination: KeyCombination(key: "s", modifiers: [.command, .shift])),
+            KeyboardShortcut(action: .openWorkflowGraph, keyCombination: KeyCombination(key: "g", modifiers: [.command]))
         ]
     }
 }

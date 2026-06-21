@@ -127,6 +127,7 @@ actor MCPClient {
 
             tools.append(MCPTool(
                 serverId: serverConfig.id,
+                serverNamespace: serverConfig.toolNamespace,
                 name: name,
                 description: description,
                 inputSchema: inputSchema

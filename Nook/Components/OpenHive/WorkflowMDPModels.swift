@@ -68,6 +68,7 @@ struct MDPEdge: Identifiable, Equatable {
     let actionType: String
     let weight: Double
     let support: Int
+    let isPrimary: Bool
 }
 
 struct WorkflowMDPGraph: Equatable {
@@ -93,15 +94,48 @@ enum WorkflowMDPLoadError: LocalizedError {
 }
 
 enum WorkflowMDPParser {
+    private static var openHiveSupportRoot: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/OpenHive", isDirectory: true)
+    }
+
     static func load(workflowId: String) -> Result<WorkflowMDPGraph, WorkflowMDPLoadError> {
-        let url = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/OpenHive/workflows/\(workflowId).json")
+        for url in workflowJSONURLs(workflowId: workflowId) {
+            if let result = load(from: url, workflowId: workflowId) {
+                return result
+            }
+        }
+        return .failure(.message("Could not load workflow “\(workflowId)”"))
+    }
+
+    private static func workflowJSONURLs(workflowId: String) -> [URL] {
+        let root = openHiveSupportRoot
+        return [
+            root.appendingPathComponent("workflows/\(workflowId).json"),
+            root.appendingPathComponent("mdps/\(workflowId).json"),
+        ]
+    }
+
+    private static func load(from url: URL, workflowId: String) -> Result<WorkflowMDPGraph, WorkflowMDPLoadError>? {
         guard let data = try? Data(contentsOf: url),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else {
-            return .failure(.message("Could not load workflow “\(workflowId)”"))
+        else { return nil }
+        switch parse(json: json, workflowId: workflowId) {
+        case .success(let graph):
+            return .success(graph)
+        case .failure(let error):
+            return .failure(error)
         }
-        return parse(json: json, workflowId: workflowId)
+    }
+
+    static func loadJSON(workflowId: String) -> [String: Any]? {
+        for url in workflowJSONURLs(workflowId: workflowId) {
+            guard let data = try? Data(contentsOf: url),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { continue }
+            return json
+        }
+        return nil
     }
 
     static func parse(json: [String: Any], workflowId: String) -> Result<WorkflowMDPGraph, WorkflowMDPLoadError> {
@@ -117,6 +151,7 @@ enum WorkflowMDPParser {
         let clusters = buildClusters(policyNodesRaw)
         let startId = policyStartId(policy)
         let path = orderedPath(from: startId, policy: policy)
+        let transitionsRaw = json["transitions"] as? [[String: Any]] ?? []
 
         var states: [MDPStateNode] = []
         var edges: [MDPEdge] = []
@@ -147,7 +182,7 @@ enum WorkflowMDPParser {
                 if let n = nextRaw as? String, !n.isEmpty { return n }
                 return nil
             }()
-            let hasNext = nextId.flatMap { policy[$0] != nil } ?? false
+            let hasNext = nextId.flatMap { policy[$0] != nil || rawNodes[$0] != nil } ?? false
             let cluster = Int(id).flatMap { clusters[$0] }
             let actionDict = entry["action"] as? [String: Any] ?? [:]
             let primary = actionCandidate(from: actionDict, id: "\(id)-primary")
@@ -163,15 +198,36 @@ enum WorkflowMDPParser {
                     sampleElementText: sampleElementText,
                     sampleAction: primary,
                     isStart: id == startId,
-                    isTerminal: !hasNext,
+                    isTerminal: !hasNext && !transitionsRaw.contains { ($0["from"] as? String) == id || ($0["from"] as? Int).map(String.init) == id },
                     cluster: cluster,
                     primaryAction: primary,
                     nextStateId: hasNext ? nextId : nil,
                     artifacts: artifacts
                 )
             )
+        }
 
-            if let nextId, hasNext, let primary {
+        if !transitionsRaw.isEmpty {
+            edges = parseTransitions(transitionsRaw, policy: policy, clusters: clusters, rawNodes: rawNodes)
+            states = mergeTransitionStates(
+                existing: states,
+                transitions: transitionsRaw,
+                policy: policy,
+                clusters: clusters,
+                rawNodes: rawNodes,
+                startId: startId
+            )
+        } else {
+            for (id, entry) in policy {
+                let nextRaw = entry["next"]
+                let nextId: String? = {
+                    if let n = nextRaw as? Int { return String(n) }
+                    if let n = nextRaw as? String, !n.isEmpty { return n }
+                    return nil
+                }()
+                guard let nextId, policy[nextId] != nil else { continue }
+                let actionDict = entry["action"] as? [String: Any] ?? [:]
+                guard let primary = actionCandidate(from: actionDict, id: "\(id)-primary") else { continue }
                 edges.append(
                     MDPEdge(
                         id: "\(id)->\(nextId)",
@@ -180,10 +236,12 @@ enum WorkflowMDPParser {
                         label: primary.label,
                         actionType: primary.type,
                         weight: primary.successRate,
-                        support: primary.support
+                        support: primary.support,
+                        isPrimary: true
                     )
                 )
             }
+            edges.append(contentsOf: alternateEdges(from: clusters, policy: policy, primaryEdges: edges))
         }
 
         states.sort { lhs, rhs in
@@ -279,25 +337,158 @@ enum WorkflowMDPParser {
 
     private static func layerIndices(graph: WorkflowMDPGraph) -> [String: Int] {
         var layers: [String: Int] = [:]
-        guard let start = graph.path.first else {
+        var adjacency: [String: [String]] = [:]
+        for edge in graph.edges {
+            adjacency[edge.from, default: []].append(edge.to)
+        }
+
+        guard let start = graph.path.first ?? graph.states.first?.id else {
             for (i, s) in graph.states.enumerated() { layers[s.id] = i }
             return layers
         }
+
         var queue: [(String, Int)] = [(start, 0)]
         var seen = Set<String>()
         while !queue.isEmpty {
             let (id, layer) = queue.removeFirst()
-            if seen.contains(id) { continue }
+            if seen.contains(id) {
+                layers[id] = min(layers[id] ?? layer, layer)
+                continue
+            }
             seen.insert(id)
-            layers[id] = max(layers[id] ?? 0, layer)
-            if let next = graph.stateMap[id]?.nextStateId {
+            layers[id] = layer
+            for next in adjacency[id] ?? [] {
                 queue.append((next, layer + 1))
             }
         }
+
         for state in graph.states where layers[state.id] == nil {
             layers[state.id] = 0
         }
         return layers
+    }
+
+    private static func stringId(_ raw: Any?) -> String? {
+        if let s = raw as? String, !s.isEmpty { return s }
+        if let n = raw as? Int { return String(n) }
+        return nil
+    }
+
+    private static func parseTransitions(
+        _ raw: [[String: Any]],
+        policy: [String: [String: Any]],
+        clusters: [Int: MDPClusterInfo],
+        rawNodes: [String: [String: Any]]
+    ) -> [MDPEdge] {
+        raw.compactMap { entry -> MDPEdge? in
+            guard let from = stringId(entry["from"]),
+                  let to = stringId(entry["to"]) else { return nil }
+            let actionDict = entry["action"] as? [String: Any] ?? [:]
+            let candidate = actionCandidate(from: actionDict, id: "\(from)->\(to)")
+            let weight = (entry["weight"] as? NSNumber)?.doubleValue ?? candidate?.successRate ?? 1.0
+            let support = entry["support"] as? Int ?? candidate?.support ?? 1
+            let isPrimary = entry["primary"] as? Bool ?? {
+                guard let nextRaw = policy[from]?["next"] else { return false }
+                return stringId(nextRaw) == to
+            }()
+            return MDPEdge(
+                id: "\(from)->\(to)-\(candidate?.id ?? "edge")",
+                from: from,
+                to: to,
+                label: candidate?.label ?? "Transition",
+                actionType: candidate?.type ?? "step",
+                weight: weight,
+                support: support,
+                isPrimary: isPrimary
+            )
+        }
+    }
+
+    private static func mergeTransitionStates(
+        existing: [MDPStateNode],
+        transitions: [[String: Any]],
+        policy: [String: [String: Any]],
+        clusters: [Int: MDPClusterInfo],
+        rawNodes: [String: [String: Any]],
+        startId: String
+    ) -> [MDPStateNode] {
+        var byId = Dictionary(uniqueKeysWithValues: existing.map { ($0.id, $0) })
+        let referenced = Set(transitions.flatMap { t -> [String] in
+            [stringId(t["from"]), stringId(t["to"])].compactMap { $0 }
+        })
+
+        for id in referenced where byId[id] == nil {
+            let meta = rawNodes[id]
+            let cluster = Int(id).flatMap { clusters[$0] }
+            let urlPattern = (meta?["url_pattern"] as? String)
+                ?? cluster?.urlPattern
+                ?? "state \(id)"
+            byId[id] = MDPStateNode(
+                id: id,
+                urlPattern: urlPattern,
+                sampleURL: meta?["url"] as? String,
+                sampleTitle: meta?["title"] as? String,
+                sampleStateText: meta?["stateText"] as? String,
+                sampleElementText: nil,
+                sampleAction: nil,
+                isStart: id == startId,
+                isTerminal: policy[id] == nil,
+                cluster: cluster,
+                primaryAction: nil,
+                nextStateId: stringId(policy[id]?["next"]),
+                artifacts: nodeArtifacts(from: meta, sampleStep: nil)
+            )
+        }
+
+        return byId.values.sorted { lhs, rhs in
+            let li = Int(lhs.id) ?? Int.max
+            let ri = Int(rhs.id) ?? Int.max
+            if li != ri { return li < ri }
+            return lhs.id < rhs.id
+        }
+    }
+
+    /// Build stale/alternate edges from cluster action candidates when explicit transitions are absent.
+    private static func alternateEdges(
+        from clusters: [Int: MDPClusterInfo],
+        policy: [String: [String: Any]],
+        primaryEdges: [MDPEdge]
+    ) -> [MDPEdge] {
+        var edges: [MDPEdge] = []
+        let primaryKeys = Set(primaryEdges.map { "\($0.from)->\($0.label)" })
+
+        for (stateId, entry) in policy {
+            guard let clusterId = Int(stateId),
+                  let cluster = clusters[clusterId],
+                  cluster.actions.count > 1 else { continue }
+            let primaryLabel = actionCandidate(
+                from: entry["action"] as? [String: Any] ?? [:],
+                id: "\(stateId)-primary"
+            )?.label
+
+            for (index, action) in cluster.actions.enumerated() {
+                if action.label == primaryLabel { continue }
+                let key = "\(stateId)->\(action.label)"
+                if primaryKeys.contains(key) { continue }
+                // Link alternate actions to the next policy hop as a weak stale edge for visualization.
+                guard let nextRaw = entry["next"],
+                      let nextId = stringId(nextRaw),
+                      policy[nextId] != nil else { continue }
+                edges.append(
+                    MDPEdge(
+                        id: "\(stateId)->\(nextId)-alt-\(index)",
+                        from: stateId,
+                        to: nextId,
+                        label: action.label,
+                        actionType: action.type,
+                        weight: action.successRate,
+                        support: action.support,
+                        isPrimary: false
+                    )
+                )
+            }
+        }
+        return edges
     }
 
     private static func buildClusters(_ raw: [[String: Any]]) -> [Int: MDPClusterInfo] {
@@ -319,36 +510,36 @@ enum WorkflowMDPParser {
         guard let meta else { return nil }
         let artifactDict = meta["artifacts"] as? [String: Any]
         let sampleArtifacts = sampleStep?["artifacts"] as? [String: Any]
-        let domHTML = meta["domHTML"] as? String
-            ?? meta["domHtml"] as? String
-            ?? sampleStep?["domHTML"] as? String
-            ?? sampleStep?["domHtml"] as? String
-            ?? sampleArtifacts?["dom"] as? String
-        let screenshotPath = meta["snapshotPath"] as? String
-            ?? meta["screenshotPath"] as? String
-            ?? sampleStep?["snapshotPath"] as? String
-            ?? sampleStep?["screenshotPath"] as? String
-            ?? artifactDict?["screenshotPath"] as? String
-            ?? sampleArtifacts?["screenshotPath"] as? String
-            ?? sampleArtifacts?["viewportScreenshot"] as? String
-            ?? sampleArtifacts?["fullPageScreenshot"] as? String
-            ?? sampleArtifacts?["elementScreenshot"] as? String
-        let accessibilityPath = meta["accessibilityPath"] as? String
-            ?? artifactDict?["accessibility"] as? String
-            ?? sampleStep?["accessibilityPath"] as? String
-            ?? sampleArtifacts?["accessibility"] as? String
-        let viewportScreenshotPath = meta["viewportScreenshotPath"] as? String
-            ?? artifactDict?["viewportScreenshot"] as? String
-            ?? sampleStep?["viewportScreenshotPath"] as? String
-            ?? sampleArtifacts?["viewportScreenshot"] as? String
-        let fullPageScreenshotPath = meta["fullPageScreenshotPath"] as? String
-            ?? artifactDict?["fullPageScreenshot"] as? String
-            ?? sampleStep?["fullPageScreenshotPath"] as? String
-            ?? sampleArtifacts?["fullPageScreenshot"] as? String
-        let elementScreenshotPath = meta["elementScreenshotPath"] as? String
-            ?? artifactDict?["elementScreenshot"] as? String
-            ?? sampleStep?["elementScreenshotPath"] as? String
-            ?? sampleArtifacts?["elementScreenshot"] as? String
+
+        let domHTML = firstString(
+            meta["domHTML"], meta["domHtml"],
+            sampleStep?["domHTML"], sampleStep?["domHtml"],
+            sampleArtifacts?["dom"]
+        )
+        let screenshotPath = firstString(
+            meta["snapshotPath"], meta["screenshotPath"],
+            sampleStep?["snapshotPath"], sampleStep?["screenshotPath"],
+            artifactDict?["screenshotPath"], sampleArtifacts?["screenshotPath"],
+            sampleArtifacts?["viewportScreenshot"], sampleArtifacts?["fullPageScreenshot"],
+            sampleArtifacts?["elementScreenshot"]
+        )
+        let accessibilityPath = firstString(
+            meta["accessibilityPath"], artifactDict?["accessibility"],
+            sampleStep?["accessibilityPath"], sampleArtifacts?["accessibility"]
+        )
+        let viewportScreenshotPath = firstString(
+            meta["viewportScreenshotPath"], artifactDict?["viewportScreenshot"],
+            sampleStep?["viewportScreenshotPath"], sampleArtifacts?["viewportScreenshot"]
+        )
+        let fullPageScreenshotPath = firstString(
+            meta["fullPageScreenshotPath"], artifactDict?["fullPageScreenshot"],
+            sampleStep?["fullPageScreenshotPath"], sampleArtifacts?["fullPageScreenshot"]
+        )
+        let elementScreenshotPath = firstString(
+            meta["elementScreenshotPath"], artifactDict?["elementScreenshot"],
+            sampleStep?["elementScreenshotPath"], sampleArtifacts?["elementScreenshot"]
+        )
+
         if domHTML == nil,
            screenshotPath == nil,
            accessibilityPath == nil,
@@ -365,6 +556,15 @@ enum WorkflowMDPParser {
             fullPageScreenshotPath: fullPageScreenshotPath,
             elementScreenshotPath: elementScreenshotPath
         )
+    }
+
+    private static func firstString(_ values: Any?...) -> String? {
+        for value in values {
+            if let string = value as? String, !string.isEmpty {
+                return string
+            }
+        }
+        return nil
     }
 
     private static func actionCandidate(from action: [String: Any], id: String) -> MDPActionCandidate? {

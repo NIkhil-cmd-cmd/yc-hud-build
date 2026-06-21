@@ -10,12 +10,15 @@ import AppKit
 struct AgentHomeView: View {
     @EnvironmentObject var browserManager: BrowserManager
     @Environment(BrowserWindowState.self) private var windowState
+    @Environment(MCPManager.self) private var mcpManager
+    @Environment(AIConfigService.self) private var configService
     @Bindable private var engine = EngineBridge.shared
     @Bindable private var runState = TaskRunState.shared
     @Bindable private var tokens = TokenDashboardManager.shared
 
     @State private var query = ""
     @State private var showAdvanced = false
+    @State private var landingAppeared = false
     @FocusState private var isFocused: Bool
 
     private let placeholder = "Describe a task, or paste a URL"
@@ -24,16 +27,8 @@ struct AgentHomeView: View {
         ZStack {
             agentBackground
 
-            if runState.phase == .matching {
+            if isOrchestratingThisTab, runState.phase == .matching {
                 matchingOverlay
-            } else if runState.phase == .running || engine.isExecuting {
-                if runState.flightDemoMode == .replay || runState.skillId != nil {
-                    flightReplayOverlay
-                } else if runState.flightDemoMode == .learning {
-                    flightLearningOverlay
-                } else {
-                    runningOverlay
-                }
             } else {
                 diaHome
             }
@@ -58,63 +53,91 @@ struct AgentHomeView: View {
             if let tab = browserManager.currentTab(for: windowState) {
                 _ = browserManager.ensureWebView(for: tab.id, in: windowState.id)
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { isFocused = true }
+            EngineBridge.shared.setAgentModelPreference(
+                provider: runState.selectedAgentModel.provider,
+                model: runState.selectedAgentModel.model
+            )
+            landingAppeared = false
+            withAnimation(.spring(response: 0.72, dampingFraction: 0.84)) {
+                landingAppeared = true
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { isFocused = true }
         }
         .onChange(of: runState.shouldRunAgentAfterMiss) { _, should in
             if should {
                 runState.shouldRunAgentAfterMiss = false
+                guard !FlightDemoRouter.isFlightPrompt(runState.prompt) else { return }
                 runAgent()
             }
         }
         .onChange(of: engine.flightDemoLearnPending) { _, pending in
             if pending {
                 engine.flightDemoLearnPending = false
-                runFlightDemoLearn()
+                let route = FlightDemoRouter.parseRoute(from: runState.prompt)
+                runFlightDemoLearn(route: route)
             }
         }
         .onChange(of: engine.flightDemoReplayMatch) { _, match in
             guard let match else { return }
             engine.flightDemoReplayMatch = nil
-            runFlightDemoReplay(skillId: match.skillId, name: match.name)
+            let route = FlightDemoRouter.parseRoute(from: runState.prompt)
+            runFlightDemoReplay(route: route)
         }
     }
 
     // MARK: - Landing
 
+    private var isOrchestratingThisTab: Bool {
+        guard let tab = browserManager.currentTab(for: windowState) else { return false }
+        return runState.activeTabId == tab.id
+    }
+
     private var diaHome: some View {
         VStack(spacing: 0) {
-            Spacer(minLength: 48)
+            Spacer(minLength: 72)
 
             VStack(alignment: .leading, spacing: 28) {
                 landingHeader
+                    .landingRise(appeared: landingAppeared, delay: 0.0)
                 promptBar
+                    .landingRise(appeared: landingAppeared, delay: 0.07)
                 landingFooter
+                    .landingRise(appeared: landingAppeared, delay: 0.14)
             }
-            .frame(maxWidth: 520)
+            .frame(maxWidth: 560)
             .frame(maxWidth: .infinity)
 
-            Spacer(minLength: 64)
+            Spacer(minLength: 88)
         }
         .padding(.horizontal, 40)
     }
 
     private var landingHeader: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             Text("OpenHive")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .textCase(.uppercase)
                 .tracking(1.2)
 
-            Text("New task")
-                .font(.system(size: 28, weight: .medium))
+            Text("What should we do?")
+                .font(.system(size: 32, weight: .medium))
                 .foregroundStyle(.primary)
-                .tracking(-0.6)
+                .tracking(-0.8)
         }
     }
 
     private var promptBar: some View {
         HStack(spacing: 10) {
+            AgentModelPickerButton(selection: Binding(
+                get: { runState.selectedAgentModel },
+                set: { runState.setAgentModel($0) }
+            ))
+
+            Divider()
+                .frame(height: 28)
+                .opacity(0.35)
+
             ZStack(alignment: .leading) {
                 if query.isEmpty {
                     Text(placeholder)
@@ -131,20 +154,19 @@ struct AgentHomeView: View {
 
             if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Button(action: submit) {
-                    Image(systemName: "return")
-                        .font(.system(size: 13, weight: .semibold))
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.system(size: 22, weight: .semibold))
                         .foregroundStyle(.primary)
-                        .frame(width: 28, height: 28)
-                        .background(.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        .symbolRenderingMode(.hierarchical)
                 }
                 .buttonStyle(.plain)
-                .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                .transition(.opacity.combined(with: .scale(scale: 0.88)))
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 13)
-        .liquidGlassSurface(cornerRadius: 10, thickness: .thin)
-        .animation(.easeOut(duration: 0.15), value: query.isEmpty)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 11)
+        .liquidGlassSurface(cornerRadius: 14, thickness: .thin)
+        .animation(.spring(response: 0.32, dampingFraction: 0.86), value: query.isEmpty)
     }
 
     private var landingFooter: some View {
@@ -186,9 +208,18 @@ struct AgentHomeView: View {
             Circle()
                 .fill(engine.engineReady ? Color(nsColor: .systemGreen) : Color(nsColor: .systemOrange))
                 .frame(width: 5, height: 5)
-            Text(engine.engineReady ? engine.agentModel : "Engine offline")
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundStyle(engine.engineReady ? Color.secondary : Color.orange)
+            if engine.engineReady {
+                HStack(spacing: 5) {
+                    AgentModelLogo(brand: runState.selectedAgentModel.brand, size: 14)
+                    Text(runState.selectedAgentModel.name)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                Text("Engine offline")
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(.orange)
+            }
         }
     }
 
@@ -214,7 +245,7 @@ struct AgentHomeView: View {
     }
 
     private var advancedControls: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 20) {
                 Toggle("Record workflow", isOn: $runState.isRecording)
                     .toggleStyle(.switch)
@@ -222,18 +253,31 @@ struct AgentHomeView: View {
                 Toggle("Plan mode", isOn: $runState.planningModeEnabled)
                     .toggleStyle(.switch)
                     .controlSize(.small)
+                Toggle("Background", isOn: $runState.backgroundModeEnabled)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
             }
             .font(.system(size: 12))
 
-            Text(runState.isRecording
-                 ? "Compiles a skill when the run finishes."
-                 : "Observation runs in the background.")
+            Text(backgroundModeHint)
                 .font(.system(size: 11))
                 .foregroundStyle(.tertiary)
+
+            MCPIntegrationsView()
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .liquidGlassSurface(cornerRadius: 10, thickness: .thin)
+    }
+
+    private var backgroundModeHint: String {
+        if runState.backgroundModeEnabled {
+            return "Agent runs in this tab — switch tabs freely; live status stays in the notch."
+        }
+        if runState.isRecording {
+            return "Compiles a skill when the run finishes."
+        }
+        return "Observation runs in the background."
     }
 
     private var matchingOverlay: some View {
@@ -384,8 +428,10 @@ struct AgentHomeView: View {
     }
 
     private var agentBackground: some View {
-        Color(nsColor: .windowBackgroundColor)
-            .ignoresSafeArea()
+        ShaderGradientBackground(brand: runState.selectedAgentModel.brand)
+            .opacity(landingAppeared ? 1 : 0)
+            .animation(.easeOut(duration: 0.9), value: landingAppeared)
+            .animation(.easeInOut(duration: 2.4), value: runState.selectedAgentModel.brand)
     }
 
     // MARK: - Actions
@@ -416,6 +462,7 @@ struct AgentHomeView: View {
                 return
             }
             runState.prompt = trimmed
+            runState.activeTabId = tab.id
             engine.startPlan(
                 prompt: trimmed,
                 webView: webView,
@@ -427,19 +474,27 @@ struct AgentHomeView: View {
             return
         }
 
-        // Flight demo: learn once (slow) → replay skill (fast MDP)
+        // Flight demo: scripted trajectory (candidate-aware) — not brittle MDP label replay
         if FlightDemoRouter.isFlightPrompt(trimmed) {
             query = ""
+            guard let tab = browserManager.currentTab(for: windowState) else { return }
+            let route = FlightDemoRouter.parseRoute(from: trimmed)
             runState.prompt = trimmed
-            runState.beginMatching(prompt: trimmed)
-            engine.matchTask(prompt: trimmed)
+            runState.activeTabId = tab.id
+            let hasSkill = FlightDemoRouter.hasLearnedSkill(for: route, in: engine.skills)
+            if hasSkill {
+                runFlightDemoReplay(route: route)
+            } else {
+                runFlightDemoLearn(route: route)
+            }
             return
         }
 
         // Skill match first, then agent fallback
         query = ""
+        guard let tab = browserManager.currentTab(for: windowState) else { return }
         runState.prompt = trimmed
-        runState.beginMatching(prompt: trimmed)
+        runState.beginMatching(prompt: trimmed, tabId: tab.id)
         engine.matchTask(prompt: trimmed)
     }
 
@@ -460,7 +515,9 @@ struct AgentHomeView: View {
         }
 
         runState.showSkillConfirm = false
-        runState.beginRun(skillName: nil, skillId: nil)
+        tab.isOpenHiveNewTab = false
+        browserManager.refreshCompositor(for: windowState)
+        runState.beginRun(skillName: nil, skillId: nil, tabId: tab.id)
         AgentNotchViewModel.shared.open()
         AgentNotchPanelController.shared.show()
         engine.startAgentTask(
@@ -480,7 +537,7 @@ struct AgentHomeView: View {
 
         tab.isOpenHiveNewTab = false
         browserManager.refreshCompositor(for: windowState)
-        runState.beginRun(skillName: match.name, skillId: match.skillId)
+        runState.beginRun(skillName: match.name, skillId: match.skillId, tabId: tab.id)
         AgentNotchViewModel.shared.open()
         engine.confirmRunSkill(
             skillId: match.skillId,
@@ -491,10 +548,8 @@ struct AgentHomeView: View {
         )
     }
 
-    private func runFlightDemoLearn() {
-        guard let tab = browserManager.currentTab(for: windowState),
-              let webView = browserManager.ensureWebView(for: tab.id, in: windowState.id)
-        else {
+    private func runFlightDemoLearn(route: FlightRoute) {
+        guard let tab = browserManager.currentTab(for: windowState) else {
             WorkflowManager.postToast("Could not prepare browser tab", isError: true)
             return
         }
@@ -503,17 +558,19 @@ struct AgentHomeView: View {
         browserManager.refreshCompositor(for: windowState)
         runState.showSkillConfirm = false
         runState.flightDemoMode = .learning
-        runState.beginRun(skillName: nil, skillId: nil)
+        runState.beginRun(skillName: FlightDemoRouter.displayName(for: route), skillId: route.skillId, tabId: tab.id)
         tokens.clearLiveRun()
         AgentNotchViewModel.shared.open()
         AgentNotchPanelController.shared.show()
 
         Task { @MainActor in
-            if let url = URL(string: FlightDemoRouter.startURL) {
-                webView.load(URLRequest(url: url))
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard let webView = browserManager.ensureWebView(for: tab.id, in: windowState.id) else {
+                WorkflowManager.postToast("Could not prepare browser tab", isError: true)
+                return
             }
+            await prepareFlightDemoPage(webView: webView)
             engine.startFlightDemoLearn(
+                route: route,
                 webView: webView,
                 tabId: tab.id,
                 windowId: windowState.id,
@@ -522,32 +579,65 @@ struct AgentHomeView: View {
         }
     }
 
-    private func runFlightDemoReplay(skillId: String, name: String) {
-        guard let tab = browserManager.currentTab(for: windowState),
-              let webView = browserManager.ensureWebView(for: tab.id, in: windowState.id)
-        else { return }
+    private func runFlightDemoReplay(route: FlightRoute) {
+        guard let tab = browserManager.currentTab(for: windowState) else { return }
 
         tab.isOpenHiveNewTab = false
         browserManager.refreshCompositor(for: windowState)
         runState.showSkillConfirm = false
         runState.flightDemoMode = .replay
-        runState.beginRun(skillName: name, skillId: skillId)
+        runState.beginRun(
+            skillName: FlightDemoRouter.displayName(for: route),
+            skillId: route.skillId,
+            tabId: tab.id
+        )
         tokens.clearLiveRun()
         AgentNotchViewModel.shared.open()
         AgentNotchPanelController.shared.show()
 
         Task { @MainActor in
-            if let url = URL(string: FlightDemoRouter.startURL) {
-                webView.load(URLRequest(url: url))
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
-            }
+            guard let webView = browserManager.ensureWebView(for: tab.id, in: windowState.id) else { return }
+            await prepareFlightDemoPage(webView: webView)
             engine.startFlightDemoReplay(
+                route: route,
                 webView: webView,
                 tabId: tab.id,
                 windowId: windowState.id,
                 browserManager: browserManager
             )
         }
+    }
+
+    /// Load Google Flights and wait until the search form is ready before scripted actions run.
+    private func prepareFlightDemoPage(webView: WKWebView) async {
+        let flightsURL = URL(string: FlightDemoRouter.startURL)!
+        if webView.url?.absoluteString.contains("travel/flights") != true {
+            webView.load(URLRequest(url: flightsURL))
+        }
+
+        var formReady = false
+        for _ in 0..<80 {
+            let url = webView.url?.absoluteString ?? ""
+            if url.contains("travel/flights") {
+                let hasForm = try? await webView.evaluateJavaScript(
+                    "document.body && document.body.innerText.toLowerCase().includes('where from')"
+                ) as? Bool
+                if hasForm == true {
+                    formReady = true
+                    break
+                }
+            }
+            try? await Task.sleep(nanoseconds: 250_000_000)
+        }
+
+        await WebViewAutomation.waitForSettle(on: webView, actionType: "navigate")
+        if !formReady {
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+        } else {
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+        }
+        OpenHiveObservation.inject(into: webView)
+        await OpenHiveObservation.installAgentAutomation(on: webView)
     }
 
     private func looksLikeURL(_ text: String) -> Bool {
@@ -555,5 +645,29 @@ struct AgentHomeView: View {
         if t.hasPrefix("http://") || t.hasPrefix("https://") { return true }
         if t.contains(" ") { return false }
         return t.contains(".") && !t.hasPrefix("/")
+    }
+}
+
+// MARK: - Dia-style rise animation
+
+private struct LandingRiseModifier: ViewModifier {
+    let appeared: Bool
+    let delay: Double
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(appeared ? 1 : 0)
+            .offset(y: appeared ? 0 : 44)
+            .scaleEffect(appeared ? 1 : 0.97, anchor: .bottom)
+            .animation(
+                .spring(response: 0.72, dampingFraction: 0.84).delay(delay),
+                value: appeared
+            )
+    }
+}
+
+private extension View {
+    func landingRise(appeared: Bool, delay: Double) -> some View {
+        modifier(LandingRiseModifier(appeared: appeared, delay: delay))
     }
 }

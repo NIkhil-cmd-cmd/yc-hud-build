@@ -113,6 +113,7 @@ struct NookApp: App {
 
         // Start enabled MCP servers
         mcpManager.startEnabledServers(configs: aiConfigService.mcpServers)
+        EngineBridge.shared.attachMCPManager(mcpManager)
     }
 
     /// Configures application-level dependencies and callbacks when the first window appears.
@@ -174,6 +175,12 @@ struct NookApp: App {
         browserManager.keyboardShortcutManager = keyboardShortcutManager
         browserManager.mcpManager = mcpManager
         browserManager.tabOrganizerManager = tabOrganizerManager
+
+        // Voice control: global ⌘+⌥ tap → notch "Listening" → agent task
+        VoiceInputManager.shared.configure(
+            browserManager: browserManager,
+            windowRegistry: windowRegistry
+        )
 
         // Set up window lifecycle callbacks
         windowRegistry.onWindowRegister = { [weak browserManager] windowState in

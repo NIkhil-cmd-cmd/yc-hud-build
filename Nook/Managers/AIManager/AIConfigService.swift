@@ -72,6 +72,7 @@ class AIConfigService {
 
         // Migrate from UserDefaults if this is a fresh config
         migrateFromUserDefaultsIfNeeded()
+        config.mcpServers = MCPServerPresets.mergeIntoConfig(config.mcpServers)
     }
 
     // MARK: - Persistence

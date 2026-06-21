@@ -18,6 +18,20 @@ final class EngineBridge {
     static let defaultPort = 8765
     static let shared = EngineBridge()
 
+    weak var mcpManager: MCPManager?
+    private(set) var mcpTools: [[String: Any]] = []
+
+    func attachMCPManager(_ manager: MCPManager) {
+        mcpManager = manager
+        syncMcpTools(from: manager)
+    }
+
+    func syncMcpTools(from manager: MCPManager) {
+        mcpTools = manager.exportToolsPayload()
+        guard isConnected, !mcpTools.isEmpty else { return }
+        send(["type": "mcp_tools_updated", "tools": mcpTools])
+    }
+
     var isConnected = false
     var observedStepCount = 0
     var workflows: [WorkflowSummary] = []
@@ -62,6 +76,7 @@ final class EngineBridge {
     private var lastMirroredAgentURL: String?
     private var pendingExaSearches: [String: (Result<String, Error>) -> Void] = [:]
     private var pendingAgentActions: [String: CheckedContinuation<(success: Bool, detail: String, resultURL: String?), Never>] = [:]
+    private var pendingWorkflowFetches: [String: CheckedContinuation<[String: Any]?, Never>] = [:]
     private var outboundQueue: [[String: Any]] = []
     private var socketReady = false
     private var isConnecting = false
@@ -73,6 +88,25 @@ final class EngineBridge {
         var id: String
         var name: String
         var steps: Int
+        var category: String
+        var tags: [String]
+        var seeded: Bool
+
+        init(
+            id: String,
+            name: String,
+            steps: Int,
+            category: String = "other",
+            tags: [String] = [],
+            seeded: Bool = false
+        ) {
+            self.id = id
+            self.name = name
+            self.steps = steps
+            self.category = category
+            self.tags = tags
+            self.seeded = seeded
+        }
     }
 
     struct SkillSummary: Identifiable, Equatable {
@@ -212,8 +246,7 @@ final class EngineBridge {
 
         activePlanId = planId
         activePlanSubtaskIndex = index
-        TaskRunState.shared.phase = .running
-        TaskRunState.shared.beginRun(skillName: nil, skillId: nil)
+        TaskRunState.shared.beginRun(skillName: nil, skillId: nil, tabId: tabId)
 
         let mode = resolution["mode"] as? String ?? "agent"
         if mode == "mdp", let skillId = resolution["skillId"] as? String {
@@ -354,6 +387,39 @@ final class EngineBridge {
     func refreshWorkflows() { send(["type": "list_workflows"]) }
     func requestTokenMetrics() { send(["type": "get_token_metrics"]) }
 
+    func setAgentModelPreference(provider: String, model: String) {
+        agentModel = model
+        TaskRunState.shared.agentModel = "\(provider)/\(model)"
+        send([
+            "type": "set_agent_model",
+            "provider": provider,
+            "model": model,
+        ])
+    }
+
+    private func agentModelPayload() -> [String: Any] {
+        let option = TaskRunState.shared.selectedAgentModel
+        return [
+            "agentProvider": option.provider,
+            "agentModel": option.model,
+        ]
+    }
+
+    func fetchWorkflow(id: String, timeoutSeconds: TimeInterval = 8) async -> [String: Any]? {
+        guard isConnected else { return nil }
+        return await withCheckedContinuation { continuation in
+            let requestId = UUID().uuidString
+            pendingWorkflowFetches[requestId] = continuation
+            send(["type": "get_workflow", "requestId": requestId, "workflowId": id])
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
+                if let cont = pendingWorkflowFetches.removeValue(forKey: requestId) {
+                    cont.resume(returning: nil)
+                }
+            }
+        }
+    }
+
     func deleteAllWorkflows() {
         send(["type": "delete_all_workflows"])
     }
@@ -472,6 +538,9 @@ final class EngineBridge {
             }
 
             payload["requireBrowserUse"] = false
+            if !mcpTools.isEmpty {
+                payload["mcpTools"] = mcpTools
+            }
             guard await sendCriticalAndWait(payload) else {
                 isExecuting = false
                 clearExecutionTarget()
@@ -519,6 +588,8 @@ final class EngineBridge {
         }
     }
 
+    /// Make the tab the agent is driving the visible, selected tab so the user
+    /// watches each step live (not just the final state). Safe to call repeatedly.
     private func revealCompositorForAgentRun() {
         guard let tabId = executeTabId,
               let windowId = executeWindowId,
@@ -527,6 +598,14 @@ final class EngineBridge {
               let tab = browserManager.tabManager.allTabs().first(where: { $0.id == tabId })
         else { return }
         tab.isOpenHiveNewTab = false
+        tab.openHiveWorkflowCatalog = false
+        tab.openHiveGraphWorkflowId = nil
+        // Mark this tab as the active run so showsOpenHiveAgentHome drops the
+        // landing overlay for the whole run, across every entry point.
+        TaskRunState.shared.activeTabId = tabId
+        if browserManager.currentTab(for: windowState)?.id != tabId {
+            browserManager.selectTab(tab, in: windowState)
+        }
         browserManager.refreshCompositor(for: windowState)
     }
 
@@ -560,12 +639,14 @@ final class EngineBridge {
     }
 
     func startFlightDemoLearn(
+        route: FlightRoute,
         webView: WKWebView,
         tabId: UUID,
         windowId: UUID,
         browserManager: BrowserManager
     ) {
         startFlightTrajectory(
+            route: route,
             webView: webView,
             tabId: tabId,
             windowId: windowId,
@@ -575,12 +656,14 @@ final class EngineBridge {
     }
 
     func startFlightDemoReplay(
+        route: FlightRoute,
         webView: WKWebView,
         tabId: UUID,
         windowId: UUID,
         browserManager: BrowserManager
     ) {
         startFlightTrajectory(
+            route: route,
             webView: webView,
             tabId: tabId,
             windowId: windowId,
@@ -590,6 +673,7 @@ final class EngineBridge {
     }
 
     private func startFlightTrajectory(
+        route: FlightRoute,
         webView: WKWebView,
         tabId: UUID,
         windowId: UUID,
@@ -598,9 +682,9 @@ final class EngineBridge {
         flightDemoReplay: Bool = false
     ) {
         startTrajectory(
-            origin: FlightDemoRouter.origin,
-            destination: FlightDemoRouter.destination,
-            departDate: FlightDemoRouter.departDate,
+            origin: route.origin,
+            destination: route.destination,
+            departDate: route.departDate,
             webView: webView,
             tabId: tabId,
             windowId: windowId,
@@ -632,6 +716,8 @@ final class EngineBridge {
         trajectoryStepLog.removeAll()
         trajectoryLastError = nil
         currentTrajectoryTask = TrajectoryTask(origin: origin, destination: destination, departDate: departDate)
+        isExecuting = true
+        revealCompositorForAgentRun()
         sendBrowserUsePayload(
             type: "start_trajectory",
             webView: webView,
@@ -676,10 +762,17 @@ final class EngineBridge {
         trajectoryStepLog.removeAll()
         trajectoryLastError = nil
         currentTrajectoryTask = nil
+        revealCompositorForAgentRun()
         var extra: [String: Any] = [
             "goal": goal,
             "task": task ?? ["goal": goal],
         ]
+        let modelFields = agentModelPayload()
+        extra.merge(modelFields) { _, new in new }
+        if var taskDict = extra["task"] as? [String: Any] {
+            taskDict.merge(modelFields) { _, new in new }
+            extra["task"] = taskDict
+        }
         if let startURL, !startURL.isEmpty {
             extra["startUrl"] = startURL
         }
@@ -860,6 +953,9 @@ final class EngineBridge {
                 applyEngineConfig(cfg)
             }
             OpenHiveLogger.log("EngineBridge", "observer_attached", data: ["sessionId": sessionId, "browserUse": browserUseEnabled, "model": agentModel])
+            if !mcpTools.isEmpty {
+                send(["type": "mcp_tools_updated", "tools": mcpTools])
+            }
         case "step_observed":
             observedStepCount = json["count"] as? Int ?? observedStepCount
         case "match_task_result":
@@ -892,7 +988,11 @@ final class EngineBridge {
                 let mdpId = best["mdpId"] as? String ?? skillId
                 runState.presentConfirmation(SkillMatch(skillId: skillId, name: name, confidence: confidence, mdpId: mdpId))
             } else if runState.agentModeEnabled {
-                runState.shouldRunAgentAfterMiss = true
+                if FlightDemoRouter.isFlightPrompt(runState.prompt) {
+                    runState.phase = .idle
+                } else {
+                    runState.shouldRunAgentAfterMiss = true
+                }
             } else {
                 runState.phase = .idle
                 WorkflowManager.postToast("No matching skill — enable Agent mode", isError: true)
@@ -941,7 +1041,9 @@ final class EngineBridge {
                 }
             }
             runState.phase = .planning
-            runState.beginRun(skillName: "Plan", skillId: nil)
+            if let tabId = executeTabId {
+                runState.beginRun(skillName: "Plan", skillId: nil, tabId: tabId)
+            }
             if let planId = runState.planId {
                 activePlanId = planId
                 activePlanSubtaskIndex = 0
@@ -1023,7 +1125,14 @@ final class EngineBridge {
             if let raw = json["workflows"] as? [[String: Any]] {
                 workflows = raw.compactMap { w in
                     guard let id = w["id"] as? String, let name = w["name"] as? String else { return nil }
-                    return WorkflowSummary(id: id, name: name, steps: w["steps"] as? Int ?? 0)
+                    return WorkflowSummary(
+                        id: id,
+                        name: name,
+                        steps: w["steps"] as? Int ?? 0,
+                        category: w["category"] as? String ?? "other",
+                        tags: w["tags"] as? [String] ?? [],
+                        seeded: w["seeded"] as? Bool ?? false
+                    )
                 }
             }
         case "workflow_saved":
@@ -1084,13 +1193,13 @@ final class EngineBridge {
             } else if backend == "playwright" {
                 executionProgress = "Playwright browser…"
             } else {
-                executionProgress = "Agent running in this tab…"
-                if let webView = resolveExecuteWebView() {
+                executionProgress = currentTrajectoryTask != nil
+                    ? "Running flight workflow…"
+                    : "Agent running in this tab…"
+                // Trajectory sends its own navigate action first — don't race with execute_state.
+                if currentTrajectoryTask == nil, let webView = resolveExecuteWebView() {
                     await installAutomationHooks(on: webView)
-                    // Trajectory sends navigate first — avoid stale execute_state before that.
-                    if currentTrajectoryTask == nil {
-                        await sendExecuteState(webView: webView)
-                    }
+                    await sendExecuteState(webView: webView)
                 }
             }
         case "execute_action":
@@ -1122,12 +1231,30 @@ final class EngineBridge {
             guard backend != "playwright",
                   let webView = resolveExecuteWebView(),
                   let action = json["action"] as? [String: Any] else { break }
+            await installAutomationHooks(on: webView)
             OpenHiveObservation.inject(into: webView)
             let actionType = action["type"] as? String ?? ""
             var ok: Bool
             var detail: String
 
-            if NookBrowserController.isBrowserAction(actionType),
+            if actionType == "mcp_call" {
+                let namespace = action["server"] as? String ?? action["namespace"] as? String ?? ""
+                let toolName = action["tool"] as? String ?? ""
+                let args = action["arguments"] as? [String: Any] ?? action["args"] as? [String: Any] ?? [:]
+                if let mcpManager {
+                    do {
+                        let result = try await mcpManager.callTool(namespace: namespace, name: toolName, arguments: args)
+                        ok = true
+                        detail = String(result.prefix(4000))
+                    } catch {
+                        ok = false
+                        detail = "MCP \(namespace).\(toolName): \(error.localizedDescription)"
+                    }
+                } else {
+                    ok = false
+                    detail = "MCP manager not available — connect apps in agent home"
+                }
+            } else if NookBrowserController.isBrowserAction(actionType),
                let tabId = executeTabId,
                let windowId = executeWindowId,
                let browserManager = executeBrowserManager {
@@ -1151,7 +1278,13 @@ final class EngineBridge {
                 ok = pageResult.success
                 detail = pageResult.detail
                 if !ok, actionType == "click", let retryView = resolveExecuteWebView() {
-                    try? await Task.sleep(nanoseconds: 600_000_000)
+                    try? await Task.sleep(nanoseconds: 1_200_000_000)
+                    pageResult = await WebViewAutomation.perform(action, on: retryView)
+                    ok = pageResult.success
+                    detail = pageResult.detail
+                }
+                if !ok, (actionType == "type" || actionType == "fill"), let retryView = resolveExecuteWebView() {
+                    try? await Task.sleep(nanoseconds: 800_000_000)
                     pageResult = await WebViewAutomation.perform(action, on: retryView)
                     ok = pageResult.success
                     detail = pageResult.detail
@@ -1162,7 +1295,7 @@ final class EngineBridge {
             } else {
                 OpenHiveLogger.log("EngineBridge", "action_ok", data: ["detail": detail])
             }
-            await WebViewAutomation.waitForSettle(on: webView, actionType: actionType == "wait" ? "navigate" : actionType)
+            await WebViewAutomation.waitForSettle(on: webView, actionType: actionType == "wait" ? "click" : actionType)
             await sendExecuteState(webView: webView, lastActionOk: ok, lastActionDetail: detail)
         case "execute_done":
             let planWasActive = activePlanId != nil
@@ -1324,6 +1457,15 @@ final class EngineBridge {
                     continuation.resume(returning: (ok, detail, json["url"] as? String))
                 }
             }
+        case "workflow_loaded":
+            if let requestId = json["requestId"] as? String,
+               let continuation = pendingWorkflowFetches.removeValue(forKey: requestId) {
+                if let workflow = json["workflow"] as? [String: Any] {
+                    continuation.resume(returning: workflow)
+                } else {
+                    continuation.resume(returning: nil)
+                }
+            }
         default:
             break
         }
@@ -1388,8 +1530,10 @@ final class EngineBridge {
             return "New tab: \((action["url"] as? String ?? "blank").prefix(50))"
         case "scroll":
             return "Scroll: \(action["value"] as? String ?? action["direction"] as? String ?? "down")"
-        case "wait", "wait_for":
-            return "Wait: \(action["ref"] as? String ?? action["text"] as? String ?? "page")"
+        case "mcp_call":
+            let server = action["server"] as? String ?? action["namespace"] as? String ?? "?"
+            let tool = action["tool"] as? String ?? "?"
+            return "MCP \(server).\(tool)"
         case "click_option":
             return "Pick option: \((action["value"] as? String ?? "").prefix(40))"
         case "extract":

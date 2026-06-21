@@ -193,6 +193,36 @@ def _step_preview(step: dict[str, Any]) -> dict[str, Any]:
     return preview
 
 
+def export_transitions(G: nx.DiGraph, policy: dict) -> list[dict[str, Any]]:
+    """Serialize all graph edges with normalized weights and primary-path flag."""
+    if not G.edges:
+        return []
+
+    max_weight = max((data.get("weight", 1) for _, _, data in G.edges(data=True)), default=1) or 1
+    primary_pairs = set()
+    for from_id, entry in policy.items():
+        nxt = entry.get("next")
+        if nxt is not None:
+            primary_pairs.add((str(from_id), str(nxt)))
+
+    out: list[dict[str, Any]] = []
+    for u, v, data in G.edges(data=True):
+        raw_weight = float(data.get("weight", 1))
+        support = int(data.get("successes", data.get("support", 1)))
+        out.append(
+            {
+                "from": str(u),
+                "to": str(v),
+                "action": data.get("action", {}),
+                "weight": round(raw_weight / max_weight, 3),
+                "support": support,
+                "primary": (str(u), str(v)) in primary_pairs,
+            }
+        )
+    out.sort(key=lambda e: (e["from"], -e["weight"]))
+    return out
+
+
 def value_iteration(G: nx.DiGraph, gamma: float = 0.95, max_iter: int = 20) -> dict:
     """Extract policy from graph via value iteration."""
     if not G.nodes:
@@ -234,6 +264,7 @@ def value_iteration(G: nx.DiGraph, gamma: float = 0.95, max_iter: int = 20) -> d
 def compile_workflow_from_buffer(name: str, buffer: list[dict]) -> dict[str, Any]:
     G = build_graph([{"harvest": buffer, "success": True}])
     policy = value_iteration(G)
+    transitions = export_transitions(G, policy)
     wid = f"wf_{int(time.time())}"
     nodes = {}
     for n in G.nodes():
@@ -251,6 +282,7 @@ def compile_workflow_from_buffer(name: str, buffer: list[dict]) -> dict[str, Any
         "name": name,
         "policy": policy,
         "policyNodes": build_policy_nodes([{"harvest": buffer, "success": True}]),
+        "transitions": transitions,
         "nodes": nodes,
         "actions": actions,
         "steps": len(buffer),

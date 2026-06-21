@@ -27,19 +27,57 @@ struct MCPServerConfig: Codable, Identifiable, Equatable {
     var transport: MCPTransportType
     var envVars: [String: String]
     var isEnabled: Bool
+    /// Short slug used in tool names, e.g. `github.create_issue`
+    var toolNamespace: String
+    var iconName: String?
+    var presetId: String?
 
     init(
         id: String = UUID().uuidString,
         name: String,
         transport: MCPTransportType,
         envVars: [String: String] = [:],
-        isEnabled: Bool = true
+        isEnabled: Bool = true,
+        toolNamespace: String? = nil,
+        iconName: String? = nil,
+        presetId: String? = nil
     ) {
         self.id = id
         self.name = name
         self.transport = transport
         self.envVars = envVars
         self.isEnabled = isEnabled
+        self.toolNamespace = toolNamespace ?? Self.normalizeNamespace(name)
+        self.iconName = iconName
+        self.presetId = presetId
+    }
+
+    static func normalizeNamespace(_ name: String) -> String {
+        name.lowercased()
+            .replacingOccurrences(of: " ", with: "-")
+            .replacingOccurrences(of: "google-", with: "")
+    }
+
+    var missingRequiredKeys: [String] {
+        envVars.compactMap { key, value in
+            value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? key : nil
+        }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, transport, envVars, isEnabled, toolNamespace, iconName, presetId
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        transport = try c.decode(MCPTransportType.self, forKey: .transport)
+        envVars = try c.decodeIfPresent([String: String].self, forKey: .envVars) ?? [:]
+        isEnabled = try c.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
+        toolNamespace = try c.decodeIfPresent(String.self, forKey: .toolNamespace) ?? Self.normalizeNamespace(name)
+        iconName = try c.decodeIfPresent(String.self, forKey: .iconName)
+        presetId = try c.decodeIfPresent(String.self, forKey: .presetId)
     }
 }
 
@@ -48,17 +86,25 @@ struct MCPServerConfig: Codable, Identifiable, Equatable {
 struct MCPTool: Identifiable, Equatable {
     let id: String
     let serverId: String
+    let serverNamespace: String
     let name: String
     let description: String
     let inputSchema: [String: Any]
 
     var qualifiedName: String {
-        "\(serverId).\(name)"
+        "\(serverNamespace).\(name)"
     }
 
-    init(serverId: String, name: String, description: String, inputSchema: [String: Any] = [:]) {
+    init(
+        serverId: String,
+        serverNamespace: String,
+        name: String,
+        description: String,
+        inputSchema: [String: Any] = [:]
+    ) {
         self.id = "\(serverId).\(name)"
         self.serverId = serverId
+        self.serverNamespace = serverNamespace
         self.name = name
         self.description = description
         self.inputSchema = inputSchema

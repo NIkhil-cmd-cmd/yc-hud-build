@@ -137,7 +137,9 @@ struct NookCommands: Commands {
         // File Section
         CommandGroup(after: .newItem) {
             Button("New Tab") {
-                windowRegistry.activeWindow?.commandPalette?.open()
+                if let windowState = windowRegistry.activeWindow {
+                    browserManager.createNewTab(in: windowState)
+                }
             }
             .modifier(dynamicShortcut(.newTab))
             Button("New Window") {
@@ -398,11 +400,16 @@ struct NookCommands: Commands {
                     openWindow(id: "openhive-trajectory-test")
                 }
 
+                Button("Open Workflow Graph") {
+                    _ = WorkflowManager.shared.openWorkflowGraph(browserManager: browserManager)
+                }
+                .modifier(dynamicShortcut(.openWorkflowGraph))
+
                 Button("Save Current Session") {
                     WorkflowManager.shared.saveCurrentSession(name: "Saved workflow")
                     browserManager.showWorkflowStatus()
                 }
-                .keyboardShortcut("s", modifiers: [.command, .shift])
+                .modifier(dynamicShortcut(.saveWorkflow))
             }
             #endif
 

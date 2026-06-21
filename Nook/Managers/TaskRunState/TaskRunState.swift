@@ -66,8 +66,26 @@ final class TaskRunState {
     var agentModel: String = "gpt-4o"
     var runStartedAt: Date?
     var flightDemoMode: FlightDemoMode = .none
+    var backgroundModeEnabled: Bool = false
+    /// Tab that owns the current match / run UI (so other tabs keep the landing page).
+    var activeTabId: UUID?
+    /// Selected agent model for new-tab runs (persisted).
+    var selectedAgentModel: AgentModelOption = AgentModelCatalog.defaultOption
 
-    private init() {}
+    private static let agentModelKey = "openhive.selectedAgentModelId"
+
+    private init() {
+        if let id = UserDefaults.standard.string(forKey: Self.agentModelKey),
+           let option = AgentModelCatalog.option(id: id) {
+            selectedAgentModel = option
+        }
+    }
+
+    func setAgentModel(_ option: AgentModelOption) {
+        selectedAgentModel = option
+        agentModel = option.engineLabel
+        UserDefaults.standard.set(option.id, forKey: Self.agentModelKey)
+    }
 
     func reset() {
         phase = .idle
@@ -83,10 +101,12 @@ final class TaskRunState {
         showSkillConfirm = false
         errorMessage = nil
         flightDemoMode = .none
+        activeTabId = nil
     }
 
-    func beginMatching(prompt: String) {
+    func beginMatching(prompt: String, tabId: UUID) {
         self.prompt = prompt
+        activeTabId = tabId
         phase = .matching
         errorMessage = nil
     }
@@ -99,9 +119,10 @@ final class TaskRunState {
         phase = .confirming
     }
 
-    func beginRun(skillName: String?, skillId: String?) {
+    func beginRun(skillName: String?, skillId: String?, tabId: UUID) {
         self.skillName = skillName
         self.skillId = skillId
+        activeTabId = tabId
         phase = .running
         stepLog = []
         showSkillConfirm = false

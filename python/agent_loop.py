@@ -99,7 +99,14 @@ class AgentTaskSession(TrajectorySession):
                 if kind == "done":
                     return await self._finish(True, step + 1, state, t0, "agent_done")
 
-                if kind == "navigate":
+                if kind == "mcp_call":
+                    swift_action = {
+                        "type": "mcp_call",
+                        "server": raw.get("server") or raw.get("namespace") or "",
+                        "tool": raw.get("tool") or "",
+                        "arguments": raw.get("arguments") or raw.get("args") or {},
+                    }
+                elif kind == "navigate":
                     url = raw.get("value") or raw.get("url") or ""
                     swift_action = {"type": "navigate", "url": url}
                 elif kind in {"search", "new_tab", "scroll", "select", "go_back", "go_forward", "reload", "switch_tab", "close_tab",
@@ -123,15 +130,16 @@ class AgentTaskSession(TrajectorySession):
 
                 await asyncio.sleep(1.0 if swift_action.get("type") == "navigate" else 0.8)
                 state = await self._wait_state(timeout=30)
-                history.append(
-                    {
-                        "step": step,
-                        "action": raw,
-                        "provider": meta.get("source"),
-                        "selectedText": raw.get("value") or swift_action.get("text") or "",
-                        "url": state.get("url", ""),
-                    }
-                )
+                if state.get("lastActionOk") is not False:
+                    history.append(
+                        {
+                            "step": step,
+                            "action": raw,
+                            "provider": meta.get("source"),
+                            "selectedText": raw.get("value") or swift_action.get("text") or "",
+                            "url": state.get("url", ""),
+                        }
+                    )
 
             return await self._finish(
                 reached_results(
