@@ -53,7 +53,6 @@ struct SidebarAIChat: View {
     @Environment(AIConfigService.self) var configService
 
     @State private var messageText: String = ""
-    @State private var ultraplanEnabled: Bool = false
     @State private var showAddModelPopover: Bool = false
     @State private var newModelId: String = ""
     @FocusState private var isTextFieldFocused: Bool
@@ -180,8 +179,6 @@ struct SidebarAIChat: View {
                 .onSubmit { sendMessage() }
 
             HStack(spacing: 8) {
-                planModeToggle
-
                 // Dynamic model selector
                 modelSelectorMenu
 
@@ -199,7 +196,7 @@ struct SidebarAIChat: View {
                         .foregroundStyle(messageText.isEmpty ? contrastText.opacity(0.3) : contrastText.opacity(0.9))
                 }
                 .buttonStyle(.plain)
-                .disabled(messageText.isEmpty || aiService.isLoading || (!aiService.hasApiKey && !ultraplanEnabled))
+                .disabled(messageText.isEmpty || aiService.isLoading || !aiService.hasApiKey)
             }
         }
         .padding(.horizontal, 12)
@@ -309,35 +306,6 @@ struct SidebarAIChat: View {
         .frame(width: 36)
     }
 
-    private var planModeToggle: some View {
-        Button(action: {
-            withAnimation(.easeInOut(duration: 0.2)) {
-                ultraplanEnabled.toggle()
-            }
-        }) {
-            HStack(spacing: 5) {
-                Image(systemName: "point.3.connected.trianglepath.dotted")
-                    .font(.system(size: 12, weight: .semibold))
-                Text("Plan")
-                    .font(.system(size: 11, weight: .semibold))
-            }
-            .foregroundStyle(ultraplanEnabled ? .cyan : contrastText.opacity(0.72))
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(ultraplanEnabled ? .cyan.opacity(0.16) : contrastText.opacity(0.08))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(ultraplanEnabled ? .cyan.opacity(0.45) : contrastText.opacity(0.12), lineWidth: 1)
-            )
-        }
-        .buttonStyle(.plain)
-        .frame(height: 28)
-        .frame(width: 68)
-        .help("Plan mode")
-    }
-
     // MARK: - Empty/Loading States
 
     private var apiKeyRequiredView: some View {
@@ -444,16 +412,15 @@ struct SidebarAIChat: View {
     private func sendMessage() {
         guard !messageText.isEmpty else { return }
         let text = messageText
-        let useUltraplan = ultraplanEnabled
         messageText = ""
 
         if WorkflowManager.shared.handleChatCommand(text, browserManager: browserManager, windowState: windowState) {
             return
         }
 
-        guard aiService.hasApiKey || useUltraplan else { return }
+        guard aiService.hasApiKey else { return }
         Task {
-            await aiService.sendMessage(text, windowState: windowState, ultraplanEnabled: useUltraplan)
+            await aiService.sendMessage(text, windowState: windowState)
         }
     }
 
