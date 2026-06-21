@@ -180,6 +180,8 @@ struct SidebarAIChat: View {
                 .onSubmit { sendMessage() }
 
             HStack(spacing: 8) {
+                planModeToggle
+
                 // Dynamic model selector
                 modelSelectorMenu
 
@@ -188,8 +190,6 @@ struct SidebarAIChat: View {
                    providerType == .gemini || providerType == .openRouter {
                     webSearchToggle
                 }
-
-                ultraplanToggle
 
                 Spacer()
 
@@ -309,25 +309,33 @@ struct SidebarAIChat: View {
         .frame(width: 36)
     }
 
-    private var ultraplanToggle: some View {
+    private var planModeToggle: some View {
         Button(action: {
             withAnimation(.easeInOut(duration: 0.2)) {
                 ultraplanEnabled.toggle()
             }
         }) {
-            Image(systemName: "point.3.connected.trianglepath.dotted")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(ultraplanEnabled ? .cyan : contrastText.opacity(0.5))
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(ultraplanEnabled ? .cyan.opacity(0.15) : contrastText.opacity(0.08))
-                )
+            HStack(spacing: 5) {
+                Image(systemName: "point.3.connected.trianglepath.dotted")
+                    .font(.system(size: 12, weight: .semibold))
+                Text("Plan")
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            .foregroundStyle(ultraplanEnabled ? .cyan : contrastText.opacity(0.72))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(ultraplanEnabled ? .cyan.opacity(0.16) : contrastText.opacity(0.08))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(ultraplanEnabled ? .cyan.opacity(0.45) : contrastText.opacity(0.12), lineWidth: 1)
+            )
         }
         .buttonStyle(.plain)
         .frame(height: 28)
-        .frame(width: 36)
-        .help("Ultraplan")
+        .frame(width: 68)
+        .help("Plan mode")
     }
 
     // MARK: - Empty/Loading States
