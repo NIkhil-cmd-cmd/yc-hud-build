@@ -387,17 +387,11 @@ struct WindowView: View {
             }
         }
         .overlay {
-            if aiService.isExecutingTools {
+            if aiService.isExecutingTools, windowState.isSidebarAIChatVisible {
                 ToolExecutionGlowView()
                     .transition(.opacity.animation(.easeInOut(duration: 0.3)))
                     .allowsHitTesting(false)
             }
-        }
-        .overlay(alignment: .topTrailing) {
-            OpenHiveStatusHUD()
-                .environment(windowState)
-                .environmentObject(browserManager)
-                .zIndex(9000)
         }
         .padding(.bottom, 8)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

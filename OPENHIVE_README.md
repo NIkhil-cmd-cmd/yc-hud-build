@@ -1,39 +1,34 @@
-# OpenHive — HUD Frontier Hackathon
+# OpenHive — BrowserOS + Python Policy Engine
 
-**Tagline:** The agent thought once. Now it never has to again.
+**The agent thought once. Now it never has to again.**
 
-OpenHive is a native macOS browser (Nook fork) that passively learns workflows from your browsing, compiles them into embedding-based Markov policies, and replays tasks with zero LLM tokens on Tier 1 execution.
+OpenHive runs on **[BrowserOS](https://github.com/browseros-ai/BrowserOS)** (CDP automation) with a local Python policy engine for passive learning and zero-token replay.
+
+> **Nook is deprecated** for this project direction. See [docs/BROWSEROS.md](docs/BROWSEROS.md).
 
 ## Quick start
 
-### 1. Python engine (required)
-
 ```bash
-cd /Users/nikhilkrishnaswamy/yc
-source .venv/bin/activate
-pip install websockets openai networkx pydantic
-cp .env.example .env   # optional API keys
-cd python && python engine.py
+# 1. Install BrowserOS app from https://www.browseros.com/
+
+# 2. Python engine
+cd ~/yc && source .venv/bin/activate
+./scripts/start_engine.sh
+
+# 3. Agent bridge + extension (separate terminal)
+./scripts/start_browseros.sh
 ```
-
-### 2. Xcode
-
-```bash
-open Nook.xcodeproj
-```
-
-Build and run. On launch, the app connects to `ws://localhost:8765`.
 
 ## Usage
 
-1. Browse normally — actions are captured silently
-2. In AI sidebar chat: `save this as book cheapest flight` (or `Cmd+Shift+S`)
-3. Click **Run** on a saved workflow in the OpenHive panel
-4. `Cmd+Shift+T` — tokens dashboard
+1. Browse in BrowserOS — actions recorded passively
+2. Side panel → **Workflows** → name → **Save**
+3. **Run** replays via real CDP clicks (not WKWebView)
 
 ## Architecture
 
-- **Swift:** Nook fork + EngineBridge + OpenHivePanelView
-- **Python:** engine.py, observer, train, executor, hud_env, exa_client, datagen
+- **BrowserOS agent server** — OpenHive bridge (`BrowserOS/packages/browseros-agent/apps/server/src/lib/clients/openhive/`)
+- **BrowserOS extension** — observation content script + workflows panel
+- **Python** — `engine.py`, `observer.py`, `train.py`, `executor.py`, `exa_client.py`
 
-See [docs/BUILD_PLAN.md](docs/BUILD_PLAN.md).
+Full migration guide: [docs/BROWSEROS.md](docs/BROWSEROS.md)

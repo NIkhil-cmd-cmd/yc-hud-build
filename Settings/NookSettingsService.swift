@@ -364,7 +364,7 @@ class NookSettingsService {
 
             geminiApiKeyKey: "",
             geminiModelKey: GeminiModel.flash.rawValue,
-            showAIAssistantKey: true,
+            showAIAssistantKey: false,
             aiProviderKey: AIProvider.gemini.rawValue,
             openRouterApiKeyKey: "",
             openRouterModelKey: OpenRouterModel.gpt4o.rawValue,
@@ -374,7 +374,7 @@ class NookSettingsService {
             webSearchEngineKey: "auto",
             webSearchMaxResultsKey: 5,
             webSearchContextSizeKey: "medium",
-            showLinkStatusBarKey: true,
+            showLinkStatusBarKey: false,
             pinnedTabsLookKey: "large",
             didFinishOnboardingKey: false,
             tabLayoutKey: TabLayout.sidebar.rawValue,

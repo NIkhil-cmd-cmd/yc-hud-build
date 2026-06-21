@@ -38,6 +38,9 @@ final class EngineBridge {
     private let sessionId = UUID().uuidString
     private var reconnectTask: Task<Void, Never>?
     private var executeWebView: WKWebView?
+    private var executeTabId: UUID?
+    private var executeWindowId: UUID?
+    private weak var executeBrowserManager: BrowserManager?
     private var pendingExaSearches: [String: (Result<String, Error>) -> Void] = [:]
     private var outboundQueue: [[String: Any]] = []
     private var socketReady = false
@@ -130,16 +133,44 @@ final class EngineBridge {
         send(["type": "delete_all_workflows"])
     }
 
-    func executeWorkflow(workflowId: String, params: [String: String] = [:], webView: WKWebView) {
+    func executeWorkflow(
+        workflowId: String,
+        params: [String: String] = [:],
+        webView: WKWebView,
+        tabId: UUID,
+        windowId: UUID,
+        browserManager: BrowserManager
+    ) {
         executeWebView = webView
+        executeTabId = tabId
+        executeWindowId = windowId
+        executeBrowserManager = browserManager
         isExecuting = true
         send(["type": "execute_workflow", "workflowId": workflowId, "params": params])
+    }
+
+    private func resolveExecuteWebView() -> WKWebView? {
+        if let tabId = executeTabId,
+           let windowId = executeWindowId,
+           let browserManager = executeBrowserManager,
+           let live = browserManager.getWebView(for: tabId, in: windowId) {
+            executeWebView = live
+            return live
+        }
+        return executeWebView
+    }
+
+    private func clearExecutionTarget() {
+        executeWebView = nil
+        executeTabId = nil
+        executeWindowId = nil
+        executeBrowserManager = nil
     }
 
     func cancelExecution() {
         send(["type": "cancel_execute"])
         isExecuting = false
-        executeWebView = nil
+        clearExecutionTarget()
     }
 
     func exaSearch(query: String, timeoutSeconds: TimeInterval = 10, completion: @escaping (Result<String, Error>) -> Void) {
@@ -306,7 +337,7 @@ final class EngineBridge {
             let backend = json["backend"] as? String ?? "webkit"
             if backend == "playwright" {
                 executionProgress = "Playwright browser…"
-            } else if let webView = executeWebView {
+            } else if let webView = resolveExecuteWebView() {
                 await sendExecuteState(webView: webView)
             }
         case "execute_action":
@@ -322,10 +353,19 @@ final class EngineBridge {
                 lastActionDescription = describeAction(action)
             }
             guard backend != "playwright",
-                  let webView = executeWebView,
+                  let webView = resolveExecuteWebView(),
                   let action = json["action"] as? [String: Any] else { break }
+            OpenHiveObservation.inject(into: webView)
             let actionType = action["type"] as? String ?? ""
-            let (ok, detail) = await BrowserToolExecutor.performWorkflowAction(action, on: webView)
+            var (ok, detail) = await BrowserToolExecutor.performWorkflowAction(action, on: webView)
+            if !ok, actionType == "click", let retryView = resolveExecuteWebView() {
+                try? await Task.sleep(nanoseconds: 900_000_000)
+                let retry = await BrowserToolExecutor.performWorkflowAction(action, on: retryView)
+                if retry.success {
+                    ok = retry.success
+                    detail = retry.detail
+                }
+            }
             if !ok {
                 OpenHiveLogger.error("EngineBridge", "action_failed", data: ["action": action, "detail": detail])
             } else {
@@ -333,15 +373,15 @@ final class EngineBridge {
             }
             let waitNs: UInt64
             switch actionType {
-            case "navigate": waitNs = 2_500_000_000
-            case "type", "fill": waitNs = 2_500_000_000
-            default: waitNs = 1_200_000_000
+            case "navigate": waitNs = 3_000_000_000
+            case "type", "fill": waitNs = 3_500_000_000
+            default: waitNs = 1_500_000_000
             }
             try? await Task.sleep(nanoseconds: waitNs)
             await sendExecuteState(webView: webView, lastActionOk: ok, lastActionDetail: detail)
         case "execute_done":
             isExecuting = false
-            executeWebView = nil
+            clearExecutionTarget()
             executionProgress = nil
             lastActionDescription = nil
             connectionError = nil
@@ -355,7 +395,7 @@ final class EngineBridge {
             requestTokenMetrics()
         case "execute_cancelled":
             isExecuting = false
-            executeWebView = nil
+            clearExecutionTarget()
             executionProgress = nil
             lastActionDescription = nil
         case "error":

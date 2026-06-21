@@ -11,6 +11,7 @@ enum OpenHiveChatCommand: Equatable {
     case notHandled
     case compile(name: String)
     case run(workflowId: String, workflowName: String)
+    case handledLocally
 }
 
 @MainActor
@@ -32,8 +33,14 @@ final class WorkflowManager {
     private init() {}
 
     func parseChatCommand(_ text: String) -> OpenHiveChatCommand {
-        let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         OpenHiveLogger.log("WorkflowManager", "parseChatCommand", data: ["text": text])
+
+        if WorkflowSlashCommand.parse(trimmed).isHandled {
+            return .handledLocally
+        }
+
+        let lower = trimmed.lowercased()
 
         if lower.hasPrefix("save") || lower.contains("remember this") || lower.contains("save this") {
             let name = extractWorkflowName(from: text) ?? "Saved workflow"
@@ -64,10 +71,17 @@ final class WorkflowManager {
         return .notHandled
     }
 
-    func handleChatCommand(_ text: String) -> Bool {
+    func handleChatCommand(_ text: String, browserManager: BrowserManager? = nil) -> Bool {
+        if WorkflowSlashCommand.parse(text).isHandled {
+            guard let browserManager else { return true }
+            return WorkflowSlashCommandExecutor.execute(text, browserManager: browserManager)
+        }
+
         switch parseChatCommand(text) {
         case .notHandled:
             return false
+        case .handledLocally:
+            return true
         case .compile(let name):
             if name.isEmpty { return true }
             EngineBridge.shared.compileWorkflow(name: name)
@@ -104,14 +118,28 @@ final class WorkflowManager {
         compileMessage = "Compiling..."
     }
 
-    func execute(workflowId: String, webView: WKWebView, params: [String: String] = [:]) {
+    func execute(
+        workflowId: String,
+        webView: WKWebView,
+        tabId: UUID,
+        windowId: UUID,
+        browserManager: BrowserManager,
+        params: [String: String] = [:]
+    ) {
         guard !isExecuting else { return }
         isExecuting = true
         executeWebView = webView
         lastError = nil
         compileMessage = "Running in current tab…"
         TokenDashboardManager.shared.clearLiveRun()
-        EngineBridge.shared.executeWorkflow(workflowId: workflowId, params: params, webView: webView)
+        EngineBridge.shared.executeWorkflow(
+            workflowId: workflowId,
+            params: params,
+            webView: webView,
+            tabId: tabId,
+            windowId: windowId,
+            browserManager: browserManager
+        )
     }
 
     func cancelExecution() {
