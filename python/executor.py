@@ -13,17 +13,6 @@ STATE_THRESHOLD = 0.82
 MAX_STEPS = 25
 
 
-def _action_key(action: dict) -> tuple:
-    return (
-        action.get("type"),
-        action.get("text"),
-        action.get("selector"),
-        action.get("name"),
-        action.get("url"),
-        action.get("value"),
-    )
-
-
 def dedupe_actions(actions: list[dict]) -> list[dict]:
     """Drop empty clicks, blank navigates, and consecutive duplicate actions."""
     out: list[dict] = []
@@ -58,6 +47,75 @@ def dedupe_actions(actions: list[dict]) -> list[dict]:
     return out
 
 
+def _action_key(action: dict) -> tuple:
+    return (
+        action.get("type"),
+        action.get("text"),
+        action.get("selector"),
+        action.get("name"),
+        action.get("url"),
+        action.get("value"),
+    )
+
+
+def _primary_host(actions: list[dict]) -> str | None:
+    from collections import Counter
+    from urllib.parse import urlparse
+
+    hosts: list[str] = []
+    for action in actions:
+        url = action.get("url") or ""
+        if url.startswith("http"):
+            host = urlparse(url).netloc.replace("www.", "")
+            if host:
+                hosts.append(host)
+        sel = f"{action.get('selector') or ''}{action.get('name') or ''}"
+        if "youtube" in sel or "search_query" in sel:
+            hosts.append("youtube.com")
+    if not hosts:
+        return None
+    return Counter(hosts).most_common(1)[0][0]
+
+
+def normalize_actions_for_replay(actions: list[dict]) -> list[dict]:
+    """Drop noisy cross-site navigates and redundant YouTube chrome clicks."""
+    actions = dedupe_actions(actions)
+    primary = _primary_host(actions)
+    if primary and "youtube" in primary:
+        cleaned: list[dict] = []
+        for action in actions:
+            if action.get("type") == "navigate":
+                url = action.get("url") or ""
+                if url and "youtube.com" not in url and "youtu.be" not in url:
+                    continue
+            cleaned.append(action)
+        actions = cleaned
+
+        has_search_type = any(
+            action.get("type") in ("type", "fill")
+            and (
+                "search_query" in (action.get("selector") or "")
+                or action.get("name") == "search_query"
+            )
+            for action in actions
+        )
+        if has_search_type:
+            actions = [
+                action
+                for action in actions
+                if not (
+                    action.get("type") == "click"
+                    and (
+                        (action.get("selector") or "")
+                        in ("#search-button-narrow", "#search-icon-legacy", "#search")
+                        or action.get("name") == "search-button-narrow"
+                        or (action.get("text") or "").strip().lower() == "search"
+                    )
+                )
+            ]
+    return actions
+
+
 def _actions_from_policy(workflow: dict[str, Any]) -> list[dict]:
     """Rebuild ordered actions from policy graph for older workflow files."""
     policy = workflow.get("policy", {})
@@ -87,7 +145,7 @@ class PolicyExecutor:
         self.policy = workflow.get("policy", {})
         self.nodes = workflow.get("nodes", {})
         raw_actions = workflow.get("actions") or _actions_from_policy(workflow)
-        self.ordered_actions: list[dict] = dedupe_actions(raw_actions)
+        self.ordered_actions: list[dict] = normalize_actions_for_replay(raw_actions)
         self.params = params or {}
         self.tokens = 0
         self.tier_log: list[int] = []

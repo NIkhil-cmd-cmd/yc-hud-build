@@ -45,6 +45,12 @@ struct URLCitation: Identifiable, Equatable, Codable {
 }
 
 struct SidebarAIChat: View {
+    private enum SidebarMode: String, CaseIterable, Identifiable {
+        case workflows = "Workflows"
+        case assistant = "Assistant"
+        var id: String { rawValue }
+    }
+
     @Environment(BrowserWindowState.self) private var windowState
     @EnvironmentObject var browserManager: BrowserManager
     @EnvironmentObject var gradientColorManager: GradientColorManager
@@ -53,6 +59,7 @@ struct SidebarAIChat: View {
     @Environment(AIConfigService.self) var configService
 
     @State private var messageText: String = ""
+    @State private var sidebarMode: SidebarMode = .workflows
     @State private var showAddModelPopover: Bool = false
     @State private var newModelId: String = ""
     @FocusState private var isTextFieldFocused: Bool
@@ -63,13 +70,57 @@ struct SidebarAIChat: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if sidebarMode == .workflows {
+                ScrollView {
+                    WorkflowsPanelView(style: .compact)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                chatBody
+            }
+        }
+        .safeAreaInset(edge: .top, content: {
+            headerView
+        })
+        .safeAreaInset(edge: .bottom) {
+            if sidebarMode == .assistant {
+                inputAreaView
+            }
+        }
+        .safeAreaPadding(.top, 8)
+        .safeAreaPadding(.bottom, 8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear {
+            if sidebarMode == .assistant {
+                isTextFieldFocused = true
+            }
+            if configService.activeProviderType == .ollama {
+                Task { await configService.fetchOllamaModels() }
+            }
+        }
+        .onChange(of: sidebarMode) { _, mode in
+            if mode == .assistant {
+                isTextFieldFocused = true
+            }
+        }
+        .onChange(of: configService.config.activeProviderId) { _, _ in
+            if configService.activeProviderType == .ollama {
+                Task { await configService.fetchOllamaModels() }
+            }
+        }
+    }
+
+    private var chatBody: some View {
+        VStack(spacing: 0) {
             // Messages area
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 12) {
                         if aiService.messages.isEmpty {
                             if !aiService.hasApiKey {
-                                openHiveWorkflowHelpView
+                                apiKeyRequiredView
                             } else {
                                 emptyStateView
                             }
@@ -105,31 +156,6 @@ struct SidebarAIChat: View {
                 }.ignoresSafeArea()
             }
         }
-        .safeAreaInset(edge: .top, content: {
-            VStack(spacing: 0) {
-                headerView
-                OpenHivePanelView()
-                    .environmentObject(browserManager)
-            }
-        })
-        .safeAreaInset(edge: .bottom) {
-            inputAreaView
-        }
-        .safeAreaPadding(.top, 8)
-        .safeAreaPadding(.bottom, 8)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onAppear {
-            isTextFieldFocused = true
-
-            if configService.activeProviderType == .ollama {
-                Task { await configService.fetchOllamaModels() }
-            }
-        }
-        .onChange(of: configService.config.activeProviderId) { _, _ in
-            if configService.activeProviderType == .ollama {
-                Task { await configService.fetchOllamaModels() }
-            }
-        }
     }
 
     // MARK: - Header
@@ -145,29 +171,32 @@ struct SidebarAIChat: View {
             .buttonStyle(NavButtonStyle())
             .foregroundStyle(Color.primary)
 
-            if !aiService.messages.isEmpty {
-                Text("OpenHive")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(contrastText.opacity(0.9))
-                    .transition(.blur.animation(.smooth))
+            Picker("Mode", selection: $sidebarMode) {
+                ForEach(SidebarMode.allCases) { mode in
+                    Text(mode.rawValue).tag(mode)
+                }
             }
+            .pickerStyle(.segmented)
+            .labelsHidden()
 
             Spacer()
 
-            Button("Settings", systemImage: "gearshape") {
-                showSettingsDialog()
-            }
-            .labelStyle(.iconOnly)
-            .buttonStyle(NavButtonStyle())
-            .foregroundStyle(Color.primary)
+            if sidebarMode == .assistant {
+                Button("Settings", systemImage: "gearshape") {
+                    showSettingsDialog()
+                }
+                .labelStyle(.iconOnly)
+                .buttonStyle(NavButtonStyle())
+                .foregroundStyle(Color.primary)
 
-            Button("Clear Messages", systemImage: "trash") {
-                showClearMessagesDialog()
+                Button("Clear Messages", systemImage: "trash") {
+                    showClearMessagesDialog()
+                }
+                .labelStyle(.iconOnly)
+                .buttonStyle(NavButtonStyle())
+                .foregroundStyle(Color.primary)
+                .disabled(aiService.messages.isEmpty)
             }
-            .labelStyle(.iconOnly)
-            .buttonStyle(NavButtonStyle())
-            .foregroundStyle(Color.primary)
-            .disabled(aiService.messages.isEmpty)
         }
         .padding(.horizontal, 8)
     }
@@ -176,7 +205,7 @@ struct SidebarAIChat: View {
 
     private var inputAreaView: some View {
         VStack(spacing: 8) {
-            TextField("Ask OpenHive or save/run workflows...", text: $messageText, axis: .vertical)
+            TextField("Ask anything...", text: $messageText, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(.system(size: 13, weight: .medium))
                 .foregroundColor(contrastText.opacity(0.9))
@@ -205,7 +234,9 @@ struct SidebarAIChat: View {
                 .disabled(
                     messageText.isEmpty
                         || aiService.isLoading
-                        || (!aiService.hasApiKey && WorkflowManager.shared.parseChatCommand(messageText) == .notHandled)
+                        || (!aiService.hasApiKey
+                            && WorkflowManager.shared.parseChatCommand(messageText) == .notHandled
+                            && !WorkflowSlashCommandExecutor.isSlashCommand(messageText))
                 )
             }
         }
@@ -318,64 +349,6 @@ struct SidebarAIChat: View {
 
     // MARK: - Empty/Loading States
 
-    private var openHiveWorkflowHelpView: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 8) {
-                Image(systemName: "brain.head.profile")
-                    .font(.system(size: 28))
-                    .foregroundStyle(.green.opacity(0.8))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Passive Learning Active")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(contrastText.opacity(0.9))
-                    Text("Browse normally — clicks & typing are recorded")
-                        .font(.system(size: 11))
-                        .foregroundStyle(contrastText.opacity(0.55))
-                }
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Workflow commands (no API key needed)")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(contrastText.opacity(0.7))
-                commandRow("save this as flight search")
-                commandRow("run flight workflow")
-                commandRow("list workflows")
-            }
-
-            if !EngineBridge.shared.isConnected {
-                Text("Start engine: ./scripts/start_engine.sh")
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.orange)
-            }
-
-            Divider().opacity(0.3)
-
-            VStack(spacing: 6) {
-                Text("AI chat requires an API key")
-                    .font(.system(size: 11))
-                    .foregroundStyle(contrastText.opacity(0.5))
-                Button(action: { showSettingsDialog() }) {
-                    Text("Add API Key (optional)")
-                        .font(.system(size: 11, weight: .medium))
-                }
-                .buttonStyle(.borderless)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .padding(.top, 24)
-    }
-
-    private func commandRow(_ text: String) -> some View {
-        HStack(spacing: 6) {
-            Text("›")
-                .foregroundStyle(.green.opacity(0.7))
-            Text(text)
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(contrastText.opacity(0.75))
-        }
-    }
-
     private var apiKeyRequiredView: some View {
         VStack(spacing: 12) {
             Image(systemName: "key.fill")
@@ -407,47 +380,19 @@ struct SidebarAIChat: View {
     }
 
     private var emptyStateView: some View {
-        VStack(spacing: 12) {
-            let webSearchEnabled = configService.generationConfig.webSearchEnabled
-            let supportsWebSearch = configService.activeProviderType == .openRouter || configService.activeProviderType == .gemini
+        VStack(spacing: 10) {
+            Image(systemName: "sparkle")
+                .font(.system(size: 28))
+                .foregroundStyle(contrastText.opacity(0.25))
 
-            Image(systemName: webSearchEnabled && supportsWebSearch ? "globe" : "sparkle")
-                .font(.system(size: 32))
-                .foregroundStyle(webSearchEnabled && supportsWebSearch ? .green.opacity(0.6) : contrastText.opacity(0.3))
-
-            Text("OpenHive")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(contrastText.opacity(0.8))
-
-            if webSearchEnabled && supportsWebSearch {
-                VStack(spacing: 6) {
-                    Text("Questions about this page, or just curious? I'm here.")
-                        .font(.system(size: 12))
-                        .foregroundStyle(contrastText.opacity(0.6))
-                        .multilineTextAlignment(.center)
-
-                    HStack(spacing: 4) {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.green.opacity(0.7))
-                        Text("Web search enabled")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(.green.opacity(0.7))
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-                    .background(.green.opacity(0.12))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                }
-            } else {
-                Text("Questions about this page, or just curious? I'm here.")
-                    .font(.system(size: 12))
-                    .foregroundStyle(contrastText.opacity(0.6))
-                    .multilineTextAlignment(.center)
-            }
+            Text("Ask about this page or anything else.")
+                .font(.system(size: 12))
+                .foregroundStyle(contrastText.opacity(0.55))
+                .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.top, 60)
+        .padding(.horizontal, 20)
+        .padding(.top, 48)
     }
 
     private var loadingView: some View {
@@ -482,15 +427,21 @@ struct SidebarAIChat: View {
         let text = messageText
         messageText = ""
 
+        if WorkflowSlashCommandExecutor.execute(text, browserManager: browserManager) {
+            return
+        }
+
         switch WorkflowManager.shared.parseChatCommand(text) {
         case .notHandled:
             guard aiService.hasApiKey else { return }
             Task {
                 await aiService.sendMessage(text, windowState: windowState)
             }
+        case .handledLocally:
+            break
         case .compile(let name):
             if !name.isEmpty {
-                WorkflowManager.shared.handleChatCommand(text)
+                WorkflowManager.shared.handleChatCommand(text, browserManager: browserManager)
             }
         case .run(let workflowId, let workflowName):
             WorkflowManager.shared.compileMessage = "Running \(workflowName)..."
@@ -507,7 +458,13 @@ struct SidebarAIChat: View {
             return
         }
         tab.isOpenHiveNewTab = false
-        WorkflowManager.shared.execute(workflowId: id, webView: webView)
+        WorkflowManager.shared.execute(
+            workflowId: id,
+            webView: webView,
+            tabId: tab.id,
+            windowId: windowId,
+            browserManager: browserManager
+        )
     }
 
     private func showSettingsDialog() {

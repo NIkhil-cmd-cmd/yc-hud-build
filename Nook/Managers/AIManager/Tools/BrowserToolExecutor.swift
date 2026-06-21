@@ -542,7 +542,7 @@ extension BrowserToolExecutor {
         case "click":
             do {
                 let detail = try await clickElement(args: action, on: webView)
-                let ok = detail.hasPrefix("Clicked")
+                let ok = detail.hasPrefix("Clicked") || detail.hasPrefix("Focused")
                 return (ok, detail)
             } catch {
                 return (false, error.localizedDescription)
@@ -606,6 +606,24 @@ extension BrowserToolExecutor {
         let text = (args["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let name = (args["name"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let genericName = Set(["button", "input", "a"])
+        let lowerText = text.lowercased()
+        let lowerSelector = selector.lowercased()
+        let lowerName = name.lowercased()
+
+        if lowerName == "search_query" || lowerSelector.contains("search_query") {
+            if let result = try await focusSearchInput(on: webView) {
+                return result
+            }
+        }
+
+        let isSearchChrome = lowerText == "search"
+            || lowerName == "search-button-narrow"
+            || lowerSelector.contains("search-button")
+            || lowerSelector.contains("search-icon")
+            || selector == "#search-button-narrow"
+        if isSearchChrome, let result = try await clickYouTubeSearch(on: webView) {
+            return result
+        }
 
         let preferText = !text.isEmpty && (
             selector.isEmpty
@@ -639,7 +657,69 @@ extension BrowserToolExecutor {
             return result
         }
 
+        if isSearchChrome, let result = try await focusSearchInput(on: webView) {
+            return result
+        }
+
         return "Provide selector, text, or name to click"
+    }
+
+    private static func focusSearchInput(on webView: WKWebView) async throws -> String? {
+        let script = """
+        (function() {
+            const selectors = [
+                'ytd-searchbox input[name="search_query"]',
+                'input#search',
+                'input[name="search_query"]',
+                '#search-input input',
+                'input[type="search"]',
+                '[role="searchbox"]',
+            ];
+            for (const sel of selectors) {
+                const el = document.querySelector(sel);
+                if (!el) continue;
+                el.scrollIntoView({block: 'center'});
+                el.focus();
+                el.click();
+                return 'Focused search input';
+            }
+            return null;
+        })();
+        """
+        let result = try await webView.evaluateJavaScript(script)
+        return result as? String
+    }
+
+    private static func clickYouTubeSearch(on webView: WKWebView) async throws -> String? {
+        let script = """
+        (function() {
+            const searchButtons = [
+                'ytd-searchbox button[aria-label="Search"]',
+                'button#search-icon-legacy',
+                '#search-button-narrow',
+                'yt-icon-button[aria-label="Search"]',
+                'button[aria-label="Search"]',
+                'tp-yt-paper-icon-button[aria-label="Search"]',
+            ];
+            for (const sel of searchButtons) {
+                const btn = document.querySelector(sel);
+                if (!btn) continue;
+                btn.scrollIntoView({block: 'center'});
+                btn.click();
+                return 'Clicked Search';
+            }
+            const input = document.querySelector('ytd-searchbox input[name="search_query"], input[name="search_query"]');
+            if (input) {
+                input.scrollIntoView({block: 'center'});
+                input.focus();
+                input.click();
+                return 'Focused search input';
+            }
+            return null;
+        })();
+        """
+        let result = try await webView.evaluateJavaScript(script)
+        return result as? String
     }
 
     private static func clickBySelector(_ selector: String, textHint: String = "", on webView: WKWebView) async throws -> String? {
@@ -663,6 +743,11 @@ extension BrowserToolExecutor {
                 }
             }
             el.scrollIntoView({block: 'center'});
+            if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.getAttribute('role') === 'searchbox') {
+                el.focus();
+                el.click();
+                return 'Focused search input';
+            }
             el.click();
             return 'Clicked element: ' + (el.textContent || el.getAttribute('title') || '').substring(0, 100).trim();
         })();
@@ -678,6 +763,11 @@ extension BrowserToolExecutor {
             const el = document.querySelector('[name="' + \(nameJSON) + '"], #' + CSS.escape(\(nameJSON)));
             if (!el) return null;
             el.scrollIntoView({block: 'center'});
+            if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+                el.focus();
+                el.click();
+                return 'Focused search input';
+            }
             el.click();
             return 'Clicked: ' + (el.textContent || el.value || '').substring(0, 100).trim();
         })();
@@ -773,8 +863,10 @@ extension BrowserToolExecutor {
                 el.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
                 if (el.form) el.form.requestSubmit ? el.form.requestSubmit() : el.form.submit();
             }
-            const btn = document.querySelector('#search-icon-legacy, button#search, #search-button-narrow, [aria-label="Search"]');
+            const btn = document.querySelector('#search-icon-legacy, button#search, #search-button-narrow, ytd-searchbox button[aria-label="Search"], yt-icon-button[aria-label="Search"], [aria-label="Search"]');
             if (btn) btn.click();
+            const form = document.querySelector('ytd-searchbox form, form#search-form');
+            if (form && form.requestSubmit) form.requestSubmit();
             return true;
         })();
         """

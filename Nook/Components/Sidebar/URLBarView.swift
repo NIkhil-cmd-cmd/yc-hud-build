@@ -35,7 +35,7 @@ struct URLBarView: View {
                                 Image(systemName: "magnifyingglass")
                                     .font(.system(size: 12))
                                     .foregroundStyle(textColor)
-                                Text("Search or Enter URL...")
+                                Text("Search or enter address")
                                     .font(.system(size: 12, weight: .medium, design: .default))
                                     .foregroundStyle(textColor)
                             }
