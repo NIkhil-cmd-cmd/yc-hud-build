@@ -1,0 +1,36 @@
+:root {
+  --bg: #fafaf8;
+  --bg-warm: #f5f2ec;
+  --surface: #ffffff;
+  --text: #1a1a1a;
+  --text-muted: #6b6b6b;
+  --text-soft: #8a8a86;
+  --border: #e8e8e4;
+  --border-strong: #d4d4d0;
+  --accent: #c17d3a;
+  --accent-deep: #8b6914;
+  --accent-soft: #e8ddd0;
+  --dark: #141414;
+  --dark-muted: #2a2a2a;
+
+  --font-display: "Instrument Serif", "Georgia", serif;
+  --font-body: "DM Sans", system-ui, sans-serif;
+
+  --space-xs: 0.5rem;
+  --space-sm: 1rem;
+  --space-md: 1.5rem;
+  --space-lg: 3rem;
+  --space-xl: 5rem;
+  --space-2xl: 8rem;
+
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 24px;
+
+  --ease-out: cubic-bezier(0.25, 0.1, 0.25, 1);
+  --shadow-soft: 0 12px 40px rgba(26, 26, 26, 0.06);
+  --shadow-lift: 0 24px 64px rgba(26, 26, 26, 0.12);
+
+  --max-width: 1200px;
+  --nav-height: 72px;
+}

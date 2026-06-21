@@ -1,0 +1,27 @@
+{
+  "name": "tera-marketing",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@paper-design/shaders-react": "^0.0.76",
+    "@react-three/fiber": "^9.1.2",
+    "@shadergradient/react": "^2.4.20",
+    "camera-controls": "^2.10.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "three": "^0.175.0",
+    "three-stdlib": "^2.35.16"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@vitejs/plugin-react": "^4.4.1",
+    "vite": "^6.3.5"
+  }
+}

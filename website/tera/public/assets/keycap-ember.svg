@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 220" fill="none" aria-hidden="true">
+  <defs>
+    <linearGradient id="emberTop" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#c4a484"/>
+      <stop offset="100%" stop-color="#8b6914"/>
+    </linearGradient>
+    <linearGradient id="emberSide" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#6b5010"/>
+      <stop offset="100%" stop-color="#4a3808"/>
+    </linearGradient>
+    <filter id="emberShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#2a2420" flood-opacity="0.18"/>
+    </filter>
+  </defs>
+  <g filter="url(#emberShadow)">
+    <path d="M24 48 L176 48 L200 72 L176 200 L24 200 L0 72 Z" fill="url(#emberSide)"/>
+    <path d="M24 24 L176 24 L176 48 L24 48 Z" fill="#5c4610"/>
+    <path d="M24 24 L176 24 L200 48 L176 72 L24 72 L0 48 Z" fill="url(#emberTop)"/>
+    <path d="M24 24 L176 24 L200 48 L176 48 L24 48 L0 48 Z" fill="white" fill-opacity="0.12"/>
+  </g>
+</svg>

@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Privacy — Tera Browser</title>
+  <meta name="description" content="Tera is local-first. Your workflows, policies, and browsing data stay on your Mac.">
+  <link rel="icon" href="assets/wordmark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="css/styles.css">
+  <style>
+    .privacy-page { padding-top: calc(var(--nav-height) + var(--space-xl)); padding-bottom: var(--space-2xl); }
+    .privacy-page h1 { font-family: var(--font-display); font-size: clamp(2rem, 4vw, 3rem); letter-spacing: -0.02em; margin-bottom: var(--space-md); }
+    .privacy-page h2 { font-family: var(--font-display); font-size: 1.375rem; margin-top: var(--space-lg); margin-bottom: var(--space-sm); }
+    .privacy-page p, .privacy-page li { color: var(--terra-slate); max-width: 42rem; margin-bottom: 0.75rem; }
+    .privacy-page ul { padding-left: 1.25rem; margin-bottom: 1rem; }
+    .privacy-back { display: inline-block; margin-bottom: var(--space-lg); font-size: 0.875rem; color: var(--terra-slate); }
+    .privacy-back:hover { color: var(--terra-bark); }
+  </style>
+</head>
+<body class="grain">
+  <header class="nav scrolled" role="banner">
+    <div class="nav-inner">
+      <a href="index.html" class="nav-logo">Tera</a>
+      <div class="nav-right">
+        <a href="index.html#features" class="btn btn-outline">Features</a>
+        <a href="index.html" class="btn btn-primary" data-download>Download</a>
+      </div>
+    </div>
+  </header>
+
+  <main class="privacy-page">
+    <div class="container">
+      <a href="index.html" class="privacy-back">Back to home</a>
+      <h1>Privacy</h1>
+      <p>Tera is built local-first. Your browsing patterns, compiled workflows, and policy data remain on your machine unless you explicitly choose to share them.</p>
+
+      <h2>What stays on your Mac</h2>
+      <ul>
+        <li>Observed browsing actions and compiled workflow policies</li>
+        <li>Embedding indexes and Markov decision process graphs</li>
+        <li>Token usage metrics and execution logs</li>
+        <li>Agent configuration and MCP integration settings</li>
+      </ul>
+      <p>Default storage path: <code>~/Library/Application Support/OpenHive/</code></p>
+
+      <h2>What may leave your Mac</h2>
+      <p>When you run the agent (not policy replay), Tera sends task context to the LLM provider you configure in your local <code>.env</code> file — Fireworks, OpenAI, or others. You control which provider and model are active.</p>
+      <p>Exa search requests are sent to Exa when the agent needs to discover page schemas. This is opt-in via your API key configuration.</p>
+
+      <h2>What we never do</h2>
+      <ul>
+        <li>Upload your browsing history to a cloud training pipeline</li>
+        <li>Sell your data or use it to build ad profiles</li>
+        <li>Run passive observation data through third-party analytics</li>
+      </ul>
+
+      <h2>Your controls</h2>
+      <p>You choose whether the Python engine is running, which models connect to your workflow, and which MCP servers are enabled. Policy replay (T1 tier) executes entirely on-device with zero LLM calls.</p>
+
+      <h2>Contact</h2>
+      <p>Questions about privacy: use the waitlist form on the <a href="index.html#pricing">pricing page</a> or open an issue on GitHub.</p>
+    </div>
+  </main>
+
+  <script src="js/main.js"></script>
+</body>
+</html>
