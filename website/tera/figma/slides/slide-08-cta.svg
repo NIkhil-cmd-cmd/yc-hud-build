@@ -1,45 +1,25 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" fill="none">
-  <defs>
-    <radialGradient id="g1" cx="50%" cy="30%" r="70%"><stop offset="0%" stop-color="#352822" stop-opacity="0.4"/><stop offset="100%" stop-color="#090909" stop-opacity="0"/></radialGradient>
-    <radialGradient id="g2" cx="80%" cy="80%" r="45%"><stop offset="0%" stop-color="#12A884" stop-opacity="0.2"/><stop offset="100%" stop-color="#090909" stop-opacity="0"/></radialGradient>
-  </defs>
   <rect width="1920" height="1080" fill="#090909"/>
-  <rect width="1920" height="1080" fill="url(#g1)"/><rect width="1920" height="1080" fill="url(#g2)"/>
 
-  <text x="100" y="100" font-family="'DM Sans',system-ui,sans-serif" font-size="11" fill="#C4A484" letter-spacing="0.14em" font-weight="600">TRY IT</text>
-  <text x="100" y="200" font-family="Georgia,'Instrument Serif',serif" font-size="72" fill="#F5F2EC" letter-spacing="-0.02em">See it live.</text>
-  <text x="100" y="290" font-family="'DM Sans',system-ui,sans-serif" font-size="26" fill="#A3A39D">2.5-minute demo: browse once ’ save workflow ’ replay with zero tokens.</text>
+  <text x="100" y="100" font-family="'DM Sans',system-ui,sans-serif" font-size="11" fill="#C4A484" letter-spacing="0.14em" font-weight="600">DEMO</text>
+  <text x="100" y="200" font-family="Georgia,'Instrument Serif',serif" font-size="72" fill="#F5F2EC" letter-spacing="-0.02em">Two and a half minutes.</text>
 
-  <!-- Demo steps -->
-  <rect x="100" y="360" width="1720" height="200" rx="28" fill="#141414" stroke="#ffffff" stroke-opacity="0.08"/>
-  <text x="148" y="420" font-family="'DM Sans',system-ui,sans-serif" font-size="11" fill="#7A7A74" letter-spacing="0.12em" font-weight="600">DEMO SCRIPT</text>
-  <text x="148" y="470" font-family="'DM Sans',system-ui,sans-serif" font-size="20" fill="#F5F2EC">` Browse Google Flights manually</text>
-  <text x="148" y="510" font-family="'DM Sans',system-ui,sans-serif" font-size="20" fill="#F5F2EC">a Chat: "save this as book cheapest flight"</text>
-  <text x="700" y="470" font-family="'DM Sans',system-ui,sans-serif" font-size="20" fill="#F5F2EC">b New tab: "run book cheapest flight"</text>
-  <text x="700" y="510" font-family="'DM Sans',system-ui,sans-serif" font-size="20" fill="#12A884">c Metrics strip: 0 tokens · T1 · ~15s</text>
+  <rect x="100" y="320" width="1720" height="320" rx="28" fill="#141414" stroke="#ffffff" stroke-opacity="0.08"/>
+  <text x="148" y="380" font-family="'DM Sans',system-ui,sans-serif" font-size="11" fill="#7A7A74" letter-spacing="0.12em" font-weight="600">SCRIPT</text>
 
-  <!-- CTAs -->
-  <rect x="100" y="600" width="820" height="80" rx="40" fill="#F5F2EC"/>
-  <text x="510" y="650" text-anchor="middle" font-family="'DM Sans',system-ui,sans-serif" font-size="20" fill="#090909" font-weight="600">tera-zeta-ten.vercel.app</text>
+  <text x="148" y="450" font-family="'DM Sans',system-ui,sans-serif" font-size="24" fill="#F5F2EC">1. Browse the task manually</text>
+  <text x="148" y="510" font-family="'DM Sans',system-ui,sans-serif" font-size="24" fill="#F5F2EC">2. Save as a named workflow</text>
+  <text x="148" y="570" font-family="'DM Sans',system-ui,sans-serif" font-size="24" fill="#F5F2EC">3. Run it again in a new tab</text>
+  <text x="900" y="450" font-family="'DM Sans',system-ui,sans-serif" font-size="24" fill="#12A884">4. Watch: 0 tokens, ~15s</text>
 
-  <rect x="1000" y="600" width="820" height="80" rx="40" fill="none" stroke="#ffffff" stroke-opacity="0.14"/>
-  <text x="1410" y="650" text-anchor="middle" font-family="'DM Sans',system-ui,sans-serif" font-size="18" fill="#F5F2EC">github.com/NIkhil-cmd-cmd/yc-hud-build</text>
+  <rect x="100" y="700" width="820" height="72" rx="36" fill="#F5F2EC"/>
+  <text x="510" y="744" text-anchor="middle" font-family="'DM Sans',system-ui,sans-serif" font-size="19" fill="#090909" font-weight="600">tera-zeta-ten.vercel.app</text>
 
-  <!-- Stack -->
-  <text x="100" y="740" font-family="'DM Sans',system-ui,sans-serif" font-size="11" fill="#7A7A74" letter-spacing="0.12em" font-weight="600">BUILT WITH</text>
-  <g font-family="'DM Sans',system-ui,sans-serif" font-size="15" fill="#A3A39D">
-    <rect x="100" y="760" width="72" height="40" rx="20" fill="#161616" stroke="#ffffff" stroke-opacity="0.08"/><text x="136" y="786" text-anchor="middle">HUD</text>
-    <rect x="188" y="760" width="88" height="40" rx="20" fill="#161616" stroke="#ffffff" stroke-opacity="0.08"/><text x="232" y="786" text-anchor="middle">Modal</text>
-    <rect x="292" y="760" width="72" height="40" rx="20" fill="#161616" stroke="#ffffff" stroke-opacity="0.08"/><text x="328" y="786" text-anchor="middle">Exa</text>
-    <rect x="380" y="760" width="88" height="40" rx="20" fill="#161616" stroke="#ffffff" stroke-opacity="0.08"/><text x="424" y="786" text-anchor="middle">Swift</text>
-    <rect x="484" y="760" width="96" height="40" rx="20" fill="#161616" stroke="#ffffff" stroke-opacity="0.08"/><text x="532" y="786" text-anchor="middle">WebKit</text>
-    <rect x="596" y="760" width="96" height="40" rx="20" fill="#161616" stroke="#ffffff" stroke-opacity="0.08"/><text x="644" y="786" text-anchor="middle">Python</text>
-    <rect x="708" y="760" width="112" height="40" rx="20" fill="#161616" stroke="#ffffff" stroke-opacity="0.08"/><text x="764" y="786" text-anchor="middle">Fireworks</text>
-    <rect x="836" y="760" width="64" height="40" rx="20" fill="#161616" stroke="#ffffff" stroke-opacity="0.08"/><text x="868" y="786" text-anchor="middle">MCP</text>
-  </g>
+  <rect x="1000" y="700" width="820" height="72" rx="36" fill="none" stroke="#ffffff" stroke-opacity="0.14"/>
+  <text x="1410" y="744" text-anchor="middle" font-family="'DM Sans',system-ui,sans-serif" font-size="17" fill="#F5F2EC">github.com/NIkhil-cmd-cmd/yc-hud-build</text>
 
-  <text x="100" y="880" font-family="Georgia,'Instrument Serif',serif" font-size="48" fill="#F5F2EC" letter-spacing="-0.02em">The agent thought once.</text>
-  <text x="100" y="940" font-family="Georgia,'Instrument Serif',serif" font-size="48" fill="#C4A484" letter-spacing="-0.02em">Now it never has to again.</text>
+  <text x="100" y="860" font-family="Georgia,'Instrument Serif',serif" font-size="40" fill="#F5F2EC" letter-spacing="-0.02em">The agent thought once.</text>
+  <text x="100" y="920" font-family="Georgia,'Instrument Serif',serif" font-size="40" fill="#C4A484" letter-spacing="-0.02em">Now it never has to again.</text>
 
   <text x="1820" y="1000" text-anchor="end" font-family="'DM Sans',system-ui,sans-serif" font-size="13" fill="#5C6B5A">08 / 08</text>
   <line x1="100" y1="1020" x2="1820" y2="1020" stroke="#ffffff" stroke-opacity="0.06"/>
