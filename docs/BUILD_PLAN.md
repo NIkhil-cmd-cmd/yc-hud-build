@@ -10,6 +10,99 @@ A native macOS browser that learns from you. You browse normally — it observes
 
 ---
 
+## Open-source browser base
+
+Build on a fork — do not scaffold a browser from scratch. UI layout follows [Dia](https://www.diabrowser.com/); automation follows agent-native patterns.
+
+### Candidates
+
+| Project | Stars | License | macOS | Why consider |
+|---------|-------|---------|-------|--------------|
+| **[Nook](https://github.com/nook-browser/Nook)** | ~1.9k | GPL-3.0 | 15.5+ | **Best UI fit** — sidebar-first, vertical tabs, manager architecture, Metal shaders. Closest to Dia layout out of the box. |
+| **[Aslan Browser](https://github.com/onorbumbum/aslan-browser)** | ~15 | MIT | 14+ | **Best agent fit** — built for AI agents. A11y-tree-first, learn mode (passive demo capture), JSON-RPC + Python SDK, Unix socket IPC. |
+| **[Web](https://github.com/nuance-dev/Web)** | ~655 | MIT | 14+ | AI browser middle ground — SwiftUI + WKWebView, tab hibernation, model routing already wired. |
+| **[Ora](https://github.com/the-ora/browser)** | ~2.1k | GPL-3.0 | 14+ | Native WebKit, XcodeGen — less sidebar-first than Nook. |
+
+### Recommendation: Nook + Aslan engine patterns
+
+| Layer | Source | Rationale |
+|-------|--------|-----------|
+| **Browser shell + UI** | Fork [Nook](https://github.com/nook-browser/Nook) | Sidebar-first SwiftUI, `TabManager`, `BrowserManager`, Metal shaders — skin with Liquid Glass. Dia layout map: right sidebar, vertical tabs, minimal toolbar. |
+| **Observation + execution IPC** | Patterns from [Aslan](https://github.com/onorbumbum/aslan-browser) | A11y tree refs (`@e0`), learn mode → our passive observer, JSON-RPC over Unix socket to Python engine. Use Aslan Python SDK ideas; do not depend on shipping Chromium. |
+| **Policy engine** | This repo (`python/`) | MDP training, embeddings, HUD eval — unchanged. |
+
+**License note:** Nook is GPL-3.0. If hackathon submission requires MIT, fork [Web](https://github.com/nuance-dev/Web) instead and port Nook's sidebar components, or fork Aslan (MIT) and build Dia-style chrome on top.
+
+**Integration approach:**
+1. Fork Nook → rename to OpenHive, rebrand, add Liquid Glass materials
+2. Add `EngineBridge` manager — WebSocket/Unix socket to `python/engine.py`
+3. Wire Nook's WKWebView tabs to Aslan-style a11y tree export on each user action
+4. Hide Aslan-style explicit learn UI — passive capture always on; compile via chat or `Cmd+Shift+S`
+
+---
+
+## Tokens dashboard
+
+Live token accounting surfaced in-app — all numbers from measured API `usage` fields, never estimates.
+
+### Placement (placeholder until UI mockup)
+
+| Surface | What it shows | When visible |
+|---------|---------------|--------------|
+| **Sidebar metrics strip** | Current run: tokens · elapsed · active tier | During workflow execution only |
+| **Tokens panel** (`Cmd+Shift+T`) | Full dashboard — collapsible sheet or sidebar section | Always accessible, low profile |
+| **Per-workflow row** | Lifetime tokens + avg time for that workflow | Workflows list |
+| **Session summary** | Today / this week totals by tier (T1/T2/T3) | Tokens panel header |
+
+### Tokens panel layout (draft — replace with your mockup)
+
+```
+┌─ Tokens ────────────────────────────────────────┐
+│  This session          Today          All time  │
+│  0                     847           12,400     │
+├─────────────────────────────────────────────────┤
+│  By tier                                        │
+│  T1 policy      ████████████████████  0         │
+│  T2 Fireworks   ██                    200       │
+│  T3 MiniMax     ████████              8,240     │
+├─────────────────────────────────────────────────┤
+│  Recent runs                                    │
+│  Book flight · Run 2    0 tok · 15s · T1       │
+│  Book flight · Learn    18,240 tok · 3:04 · T3 │
+│  Chipotle order · Run 2 0 tok · 12s · T1       │
+├─────────────────────────────────────────────────┤
+│  vs Browser Use baseline (published)            │
+│  OpenHive Run 2: 0 tok    Browser Use: ~15k/run │
+└─────────────────────────────────────────────────┘
+```
+
+### Data model
+
+```swift
+struct TokenMetrics: Codable {
+    var sessionTotal: Int
+    var todayTotal: Int
+    var allTimeTotal: Int
+    var byTier: [Int: Int]           // 1 → 0, 2 → 200, 3 → 8240
+    var recentRuns: [RunMetric]
+    var lastUpdated: Date
+}
+
+struct RunMetric: Codable {
+    var workflowId: String
+    var workflowName: String
+    var runType: String              // "learn" | "execute" | "chat"
+    var tokens: Int                  // from API usage, validated
+    var elapsedMs: Int
+    var tierLog: [Int]
+    var timestamp: Date
+}
+```
+
+Persisted to `~/Library/Application Support/OpenHive/metrics/tokens.json`. Engine appends on every LLM call (T2/T3/chat) and every T1 execution (tokens = 0). Swift `TokenDashboardManager` subscribes via WebSocket `metric` events.
+
+---
+
 ## Demo (2.5 min on stage)
 
 **0:00** — Open OpenHive. Clean new tab: search field + model selector (Exa default). Sidebar collapsed. No chrome clutter.
@@ -187,10 +280,12 @@ All outputs land in `~/Library/Application Support/OpenHive/harvest/` and compil
 
 | Layer | Technology | Role |
 |-------|------------|------|
-| **UI shell** | Swift + SwiftUI (macOS 14+) | Native Liquid Glass browser chrome, Dia-layout sidebar |
-| **Web content** | WKWebView | Real Chromium rendering, CDP via `WKWebView` debugging protocol |
-| **Engine bridge** | WebSocket (`localhost:8765`) | Swift `EngineClient` ↔ Python `engine.py` |
-| **Observation** | Python + Playwright CDP | Passive action capture, state embedding |
+| **Browser base** | [Nook](https://github.com/nook-browser/Nook) (fork) | Sidebar-first SwiftUI shell, TabManager, BrowserManager |
+| **UI shell** | Swift + SwiftUI + Liquid Glass | Dia-layout chrome, glass materials, no emojis |
+| **Web content** | WKWebView (WebKit) | Native rendering; a11y tree export (Aslan pattern) |
+| **Agent IPC** | Unix socket / WebSocket JSON-RPC | Swift `EngineBridge` ↔ Python `engine.py` (Aslan-inspired) |
+| **Observation** | Swift LearnRecorder pattern + Python observer | Passive capture; no record button |
+| **Token tracking** | `TokenDashboardManager` + `metrics/tokens.json` | Measured usage per tier, session, workflow |
 | **Embeddings** | OpenAI `text-embedding-3-small` | 1536-d state and element vectors |
 | **Policy training** | Python + NetworkX | Graph clustering (θ=0.88) + value iteration (γ=0.95) |
 | **Execution** | Python + Browser Use | `PolicyAgent` — Tier 1 policy lookup, Tier 2/3 fallback |
@@ -238,21 +333,23 @@ All outputs land in `~/Library/Application Support/OpenHive/harvest/` and compil
 
 ```
 yc-hud-build/
-├── OpenHive/                          # Swift macOS app (Xcode project)
-│   ├── OpenHiveApp.swift
-│   ├── Views/
-│   │   ├── BrowserView.swift          # WKWebView wrapper + CDP attach
-│   │   ├── SidebarView.swift          # Dia-layout right sidebar
-│   │   ├── NewTabView.swift           # Search + model picker
-│   │   ├── WorkflowsView.swift        # Workflow list + graph canvas
-│   │   └── MetricsStripView.swift     # tokens · time · tier (execution only)
+├── OpenHive/                          # Forked from Nook (Xcode project)
+│   ├── Managers/
+│   │   ├── EngineBridge/              # NEW — socket to python/engine.py
+│   │   ├── TokenDashboardManager/     # NEW — tokens.json, WebSocket metrics
+│   │   ├── WorkflowManager/           # NEW — compile, list, execute workflows
+│   │   ├── BrowserManager/            # from Nook
+│   │   └── TabManager/                # from Nook
+│   ├── Components/
+│   │   ├── Sidebar/                   # from Nook — rebrand, move right, Liquid Glass
+│   │   ├── TokensPanel/               # NEW — full token dashboard (Cmd+Shift+T)
+│   │   ├── MetricsStrip/              # NEW — live run strip during execution
+│   │   └── Workflows/                 # NEW — workflow list + graph canvas
 │   ├── Design/
 │   │   ├── OpenHiveTheme.swift        # Liquid Glass tokens
-│   │   └── GlassModifiers.swift       # .glassEffect wrappers
-│   └── Services/
-│       ├── EngineClient.swift         # WebSocket to Python
-│       ├── TabManager.swift           # Vertical tabs, pinned, groups
-│       └── ObservationSettings.swift  # Learning indicator toggle
+│   │   └── GlassModifiers.swift
+│   └── Utils/
+│       └── WebKit/                    # from Nook + a11y tree export
 ├── python/
 │   ├── engine.py                      # WebSocket server
 │   ├── observer.py                    # Passive CDP capture (replaces recorder.py)
@@ -410,8 +507,8 @@ class Observer:
 
 | Hours | Who | Task |
 |-------|-----|------|
-| 0–1 | Both | Repo init, Xcode project scaffold, `pyproject.toml`, Modal secrets, `.env.example`, Daytona devcontainer |
-| 1–4 | A | Swift shell: `BrowserView` (WKWebView), `SidebarView` (Liquid Glass, Dia layout), `EngineClient` WebSocket |
+| 0–1 | Both | Fork Nook into repo, rebrand OpenHive, `pyproject.toml`, Modal secrets, `.env.example`, Daytona devcontainer |
+| 1–4 | A | Nook sidebar → Dia layout (right side), Liquid Glass, `EngineBridge` + `TokenDashboardManager` skeleton |
 | 1–3 | B | `engine.py` + `observer.py` passive capture + `embeddings.py` |
 | 3–5 | B | `train.py` — graph + value iteration; test on mock harvest |
 | 4–7 | A | `NewTabView`, `WorkflowsView`, `MetricsStripView` — no emojis, system materials only |
@@ -450,6 +547,8 @@ class Observer:
 - [ ] Passive observation captures ≥5 steps with embeddings during normal browsing (no record button)
 - [ ] "Save this workflow" compiles and saves locally in ≤3s
 - [ ] Execute workflow → ≤20s, 0 tokens, tier log all T1 (validated by `validate_claims.py`)
+- [ ] Fork builds and runs (Nook base rebranded as OpenHive)
+- [ ] Tokens dashboard shows measured session/tier/run breakdown
 - [ ] Swift UI: Dia-layout sidebar, Liquid Glass materials, zero emojis
 - [ ] New tab: Exa search + model selector working
 - [ ] Datagen: at least one alternative path (HUD import or synthetic) produces compilable harvest
