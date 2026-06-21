@@ -392,6 +392,20 @@ struct NookCommands: Commands {
                 }
             }
 
+            #if DEBUG
+            CommandMenu("OpenHive") {
+                Button("Trajectory Test…") {
+                    openWindow(id: "openhive-trajectory-test")
+                }
+
+                Button("Save Current Session") {
+                    WorkflowManager.shared.saveCurrentSession(name: "Saved workflow")
+                    browserManager.showWorkflowStatus()
+                }
+                .keyboardShortcut("s", modifiers: [.command, .shift])
+            }
+            #endif
+
             CommandMenu("Appearance") {
                 Button("Customize Space Gradient...") {
                     browserManager.showGradientEditor()

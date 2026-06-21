@@ -67,6 +67,14 @@ struct WindowView: View {
                     CopyURLToast()
                         .environment(windowState)
                 }
+
+                // Workflow save/run toast
+                if windowState.isShowingWorkflowToast,
+                   let message = windowState.workflowToastMessage {
+                    WorkflowToast()
+                        .environment(windowState)
+                        .id(message)
+                }
                 
                 // Shortcut conflict toast
                 if windowState.isShowingShortcutConflictToast,
@@ -81,6 +89,7 @@ struct WindowView: View {
             .animation(.smooth(duration: 0.25), value: windowState.isShowingProfileSwitchToast)
             .animation(.smooth(duration: 0.25), value: browserManager.showTabClosureToast)
             .animation(.smooth(duration: 0.25), value: windowState.isShowingCopyURLToast)
+            .animation(.smooth(duration: 0.25), value: windowState.isShowingWorkflowToast)
             .animation(.smooth(duration: 0.25), value: windowState.isShowingShortcutConflictToast)
         }
         // Zoom control popup - separate from system toasts

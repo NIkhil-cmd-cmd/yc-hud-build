@@ -5,3 +5,4 @@ pydantic
 exa-py
 hud-python>=0.6.6
 playwright
+browser-use>=0.7

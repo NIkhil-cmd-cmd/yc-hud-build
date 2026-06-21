@@ -189,37 +189,11 @@ class BrowserToolExecutor {
             return "No active tab"
         }
 
-        if let playwrightResult = await Self.performViaPlaywright(
-            action: Self.playwrightAction(from: args, type: "click"),
-            webView: webView
-        ) {
-            return playwrightResult
-        }
-
-        // WKWebView fallback when engine is offline
-        if let selector = args["selector"] as? String, !selector.isEmpty {
-            let selectorJSON = jsStringLiteral(selector)
-            let script = """
-            (function() {
-                const sel = \(selectorJSON);
-                const el = document.querySelector(sel);
-                if (!el) return 'Element not found: ' + sel;
-                el.scrollIntoView({block: 'center'});
-                el.click();
-                return 'Clicked element: ' + (el.textContent || '').substring(0, 100).trim();
-            })();
-            """
-            let result = try await webView.evaluateJavaScript(script)
-            return result as? String ?? "Click executed"
-        } else if let text = args["text"] as? String, !text.isEmpty {
-            let detail = try await Self.clickElement(args: args, on: webView)
-            return detail
-        } else if let name = args["name"] as? String, !name.isEmpty {
-            let detail = try await Self.clickElement(args: args, on: webView)
-            return detail
-        } else {
-            return "Provide selector, text, or name to identify the element"
-        }
+        var action: [String: Any] = ["type": "click"]
+        for (key, value) in args { action[key] = value }
+        let result = await WebViewAutomation.perform(action, on: webView)
+        if result.success { return result.detail }
+        return result.detail
     }
 
     private func executeTypeIntoElement(_ args: [String: Any], browserManager: BrowserManager, windowState: BrowserWindowState) async throws -> String {
@@ -227,14 +201,12 @@ class BrowserToolExecutor {
             return "No active tab"
         }
 
-        if let playwrightResult = await Self.performViaPlaywright(
-            action: Self.playwrightAction(from: args, type: "type"),
-            webView: webView
-        ) {
-            return playwrightResult
-        }
-
-        return try await Self.typeIntoElement(args: args, on: webView)
+        let value = (args["value"] as? String ?? args["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        var action: [String: Any] = ["type": "type", "value": value]
+        for (k, v) in args where k != "value" && k != "text" { action[k] = v }
+        let result = await WebViewAutomation.perform(action, on: webView)
+        if result.success { return result.detail }
+        return result.detail
     }
 
     private func executeGetInteractiveElements(_ args: [String: Any], browserManager: BrowserManager, windowState: BrowserWindowState) async throws -> String {
@@ -518,83 +490,9 @@ extension BrowserToolExecutor {
         "#search-button-narrow", "#video-title", "#media-container-link", "#thumbnail",
     ]
 
-    /// Build action payload for the Python Playwright agent.
-    static func playwrightAction(from args: [String: Any], type: String) -> [String: Any] {
-        var action: [String: Any] = ["type": type]
-        for key in ["selector", "text", "name", "value", "url", "role", "submit"] {
-            if let value = args[key] { action[key] = value }
-        }
-        return action
-    }
-
-    /// Run click/type/navigate in headed Chromium via the Python engine.
-    static func performViaPlaywright(action: [String: Any], webView: WKWebView) async -> String? {
-        guard EngineBridge.shared.isConnected else { return nil }
-        let pageURL = webView.url?.absoluteString
-        let result = await EngineBridge.shared.performAgentAction(pageURL: pageURL, action: action)
-        if let resultURL = result.resultURL,
-           !resultURL.isEmpty,
-           resultURL != "about:blank",
-           let url = URL(string: resultURL),
-           webView.url?.absoluteString != resultURL {
-            webView.load(URLRequest(url: url))
-        }
-        if result.success {
-            return result.detail + (result.resultURL.map { " (page: \($0))" } ?? "")
-        }
-        Self.log.warning("Playwright action failed: \(result.detail, privacy: .public)")
-        return nil
-    }
-
     /// Run a recorded OpenHive action on a specific web view (EngineBridge replay path).
     static func performWorkflowAction(_ action: [String: Any], on webView: WKWebView) async -> (success: Bool, detail: String) {
-        guard let type = action["type"] as? String else {
-            return (false, "Missing action type")
-        }
-
-        if EngineBridge.shared.isConnected {
-            if let detail = await performViaPlaywright(action: action, webView: webView) {
-                let ok = detail.hasPrefix("Clicked") || detail.hasPrefix("Typed") || detail.hasPrefix("Focused") || detail.contains("Navigated")
-                return (ok, detail)
-            }
-        }
-
-        switch type {
-        case "navigate":
-            guard let urlString = action["url"] as? String,
-                  !urlString.isEmpty,
-                  urlString != "about:blank",
-                  urlString != "about:newtab",
-                  let url = URL(string: urlString) else {
-                return (true, "Skipped navigate")
-            }
-            if let current = webView.url, current.absoluteString == urlString || current.host == url.host && current.path == url.path {
-                return (true, "Already on page")
-            }
-            webView.load(URLRequest(url: url))
-            return (true, "Navigated to \(urlString)")
-
-        case "click":
-            do {
-                let detail = try await clickElement(args: action, on: webView)
-                let ok = detail.hasPrefix("Clicked") || detail.hasPrefix("Focused")
-                return (ok, detail)
-            } catch {
-                return (false, error.localizedDescription)
-            }
-
-        case "fill", "type":
-            do {
-                let detail = try await typeIntoElement(args: action, on: webView)
-                let ok = detail.hasPrefix("Typed")
-                return (ok, detail)
-            } catch {
-                return (false, error.localizedDescription)
-            }
-
-        default:
-            return (false, "Unknown action type: \(type)")
-        }
+        await WebViewAutomation.perform(action, on: webView)
     }
 
     /// Interactive element snapshot — same selectors as getInteractiveElements tool.
@@ -633,6 +531,55 @@ extension BrowserToolExecutor {
             return result as? [[String: Any]] ?? []
         } catch {
             return []
+        }
+    }
+
+    /// Candidate snapshot for Google Flights trajectories (matches python/smoke gate).
+    static func trajectoryCandidates(from webView: WKWebView, limit: Int = 500) async -> [[String: Any]] {
+        let script = """
+        (function() {
+            const limit = \(limit);
+            return [...document.querySelectorAll('input, textarea, button, [role=button], [role=option], [role=gridcell], [role=menuitem], [aria-label], a')]
+                .map((el, idx) => {
+                    const rect = el.getBoundingClientRect();
+                    const text = (el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.textContent || '').trim();
+                    return {
+                        ref: `e${idx}`,
+                        tag: el.tagName.toLowerCase(),
+                        role: el.getAttribute('role') || el.tagName.toLowerCase(),
+                        text,
+                        ariaLabel: el.getAttribute('aria-label') || '',
+                        placeholder: el.getAttribute('placeholder') || '',
+                        bbox: {x: rect.x, y: rect.y, width: rect.width, height: rect.height},
+                        visible: rect.width > 0 && rect.height > 0,
+                        enabled: !el.disabled
+                    };
+                })
+                .filter(e => e.visible && e.enabled && (e.text || e.ariaLabel || e.placeholder))
+                .slice(0, limit)
+                .map((e, idx) => ({...e, ref: `e${idx}`}));
+        })();
+        """
+        do {
+            let result = try await webView.evaluateJavaScript(script)
+            return result as? [[String: Any]] ?? []
+        } catch {
+            return []
+        }
+    }
+
+    static func pageText(from webView: WKWebView, limit: Int = 5000) async -> String {
+        let script = """
+        (function() {
+            const text = (document.body && document.body.innerText) ? document.body.innerText : '';
+            return text.substring(0, \(limit));
+        })();
+        """
+        do {
+            let result = try await webView.evaluateJavaScript(script)
+            return result as? String ?? ""
+        } catch {
+            return ""
         }
     }
 

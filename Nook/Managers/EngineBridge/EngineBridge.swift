@@ -28,6 +28,23 @@ final class EngineBridge {
     var hudReward: Double?
     var hudStatus: String?
 
+    struct TrajectoryStepLog: Identifiable, Equatable {
+        let id = UUID()
+        let index: Int
+        let actionType: String
+        let url: String
+    }
+
+    struct TrajectoryTask: Equatable {
+        let origin: String
+        let destination: String
+        let departDate: String
+    }
+
+    var trajectoryStepLog: [TrajectoryStepLog] = []
+    var currentTrajectoryTask: TrajectoryTask?
+    var trajectoryLastError: String?
+
     private var webSocket: URLSessionWebSocketTask?
     private let session: URLSession = {
         let config = URLSessionConfiguration.default
@@ -41,6 +58,7 @@ final class EngineBridge {
     private var executeTabId: UUID?
     private var executeWindowId: UUID?
     private weak var executeBrowserManager: BrowserManager?
+    private var lastMirroredAgentURL: String?
     private var pendingExaSearches: [String: (Result<String, Error>) -> Void] = [:]
     private var pendingAgentActions: [String: CheckedContinuation<(success: Bool, detail: String, resultURL: String?), Never>] = [:]
     private var outboundQueue: [[String: Any]] = []
@@ -150,6 +168,32 @@ final class EngineBridge {
         send(["type": "execute_workflow", "workflowId": workflowId, "params": params])
     }
 
+    func shouldCapturePopup(for tabId: UUID) -> Bool {
+        isExecuting && executeTabId == tabId
+    }
+
+    func installAutomationHooks(on webView: WKWebView) async {
+        let script = """
+        (function() {
+            if (window.__nookAutomation) return;
+            window.__nookAutomation = true;
+            const origOpen = window.open;
+            window.open = function(url, target, features) {
+                if (url && typeof url === 'string' && url !== 'about:blank') {
+                    window.location.href = url;
+                    return window;
+                }
+                return origOpen ? origOpen.call(window, url, target, features) : null;
+            };
+        })();
+        """
+        _ = try? await webView.evaluateJavaScript(script)
+    }
+
+    func removeAutomationHooks(on webView: WKWebView) async {
+        _ = try? await webView.evaluateJavaScript("window.__nookAutomation = false;")
+    }
+
     private func resolveExecuteWebView() -> WKWebView? {
         if let tabId = executeTabId,
            let windowId = executeWindowId,
@@ -166,12 +210,117 @@ final class EngineBridge {
         executeTabId = nil
         executeWindowId = nil
         executeBrowserManager = nil
+        lastMirroredAgentURL = nil
+    }
+
+    private func sendBrowserUsePayload(
+        type: String,
+        webView: WKWebView,
+        extra: [String: Any],
+        includeStartUrl: Bool = true
+    ) {
+        isExecuting = true
+        executionProgress = "Syncing cookies…"
+        trajectoryLastError = nil
+        Task { @MainActor in
+            let storage = await OpenHiveBrowserSync.exportStorageState(from: webView)
+            let pageURL = webView.url?.absoluteString ?? ""
+            let pageTitle = webView.title ?? ""
+            var payload = extra
+            payload["type"] = type
+            payload["pageUrl"] = pageURL
+            payload["pageTitle"] = pageTitle
+            payload["storageState"] = storage
+            payload["maxSteps"] = 40
+            if includeStartUrl, !pageURL.isEmpty, !pageURL.hasPrefix("about:") {
+                payload["startUrl"] = pageURL
+            }
+            guard send(payload) else {
+                isExecuting = false
+                clearExecutionTarget()
+                let msg = connectionError ?? "Could not start agent — payload too large or engine disconnected"
+                trajectoryLastError = msg
+                WorkflowManager.postToast(msg, isError: true)
+                return
+            }
+            executionProgress = "browser-use starting…"
+        }
     }
 
     func cancelExecution() {
         send(["type": "cancel_execute"])
         isExecuting = false
         clearExecutionTarget()
+    }
+
+    func startTrajectory(
+        origin: String,
+        destination: String,
+        departDate: String,
+        webView: WKWebView,
+        tabId: UUID,
+        windowId: UUID,
+        browserManager: BrowserManager
+    ) {
+        guard !isExecuting else {
+            trajectoryLastError = "Cancel the running workflow first"
+            return
+        }
+        executeWebView = webView
+        executeTabId = tabId
+        executeWindowId = windowId
+        executeBrowserManager = browserManager
+        trajectoryStepLog.removeAll()
+        trajectoryLastError = nil
+        currentTrajectoryTask = TrajectoryTask(origin: origin, destination: destination, departDate: departDate)
+        sendBrowserUsePayload(
+            type: "start_trajectory",
+            webView: webView,
+            extra: [
+                "task": [
+                    "origin": origin,
+                    "destination": destination,
+                    "departDate": departDate,
+                ],
+            ],
+            includeStartUrl: false
+        )
+    }
+
+    func cancelTrajectory() {
+        send(["type": "cancel_trajectory"])
+        currentTrajectoryTask = nil
+        isExecuting = false
+        clearExecutionTarget()
+    }
+
+    func startAgentTask(
+        goal: String,
+        startURL: String? = nil,
+        webView: WKWebView,
+        tabId: UUID,
+        windowId: UUID,
+        browserManager: BrowserManager
+    ) {
+        guard !isExecuting else {
+            trajectoryLastError = "Cancel the running agent first"
+            return
+        }
+        executeWebView = webView
+        executeTabId = tabId
+        executeWindowId = windowId
+        executeBrowserManager = browserManager
+        trajectoryStepLog.removeAll()
+        trajectoryLastError = nil
+        currentTrajectoryTask = nil
+        sendBrowserUsePayload(
+            type: "start_agent",
+            webView: webView,
+            extra: [
+                "goal": goal,
+                "task": ["goal": goal],
+            ]
+        )
     }
 
     func exaSearch(query: String, timeoutSeconds: TimeInterval = 10, completion: @escaping (Result<String, Error>) -> Void) {
@@ -240,24 +389,34 @@ final class EngineBridge {
         for msg in batch { sendRaw(msg, allowQueue: true) }
     }
 
-    private func send(_ dict: [String: Any]) {
+    @discardableResult
+    private func send(_ dict: [String: Any]) -> Bool {
         if !socketReady {
             enqueue(dict)
             if !isConnecting { connect() }
-            return
+            return true
         }
-        sendRaw(dict, allowQueue: true)
+        return sendRaw(dict, allowQueue: true)
     }
 
-    private func sendRaw(_ dict: [String: Any], allowQueue: Bool) {
+    @discardableResult
+    private func sendRaw(_ dict: [String: Any], allowQueue: Bool) -> Bool {
         guard let ws = webSocket else {
             if allowQueue { enqueue(dict) }
-            return
+            connectionError = "Engine not connected"
+            return false
         }
         guard JSONSerialization.isValidJSONObject(dict),
               let data = try? JSONSerialization.data(withJSONObject: dict),
               let text = String(data: data, encoding: .utf8)
-        else { return }
+        else {
+            connectionError = "Invalid agent payload (try fewer cookies — use a focused tab)"
+            return false
+        }
+        if data.count > 512_000 {
+            connectionError = "Agent payload too large (\(data.count / 1024)KB) — open the target site in one tab first"
+            return false
+        }
 
         ws.send(.string(text)) { [weak self] error in
             if let error {
@@ -277,6 +436,7 @@ final class EngineBridge {
                 }
             }
         }
+        return true
     }
 
     private func scheduleReconnect() {
@@ -332,7 +492,15 @@ final class EngineBridge {
             }
         case "workflow_saved":
             refreshWorkflows()
-            WorkflowManager.shared.compileMessage = "Workflow saved"
+            if let wf = json["workflow"] as? [String: Any],
+               let name = wf["name"] as? String,
+               let steps = wf["steps"] as? Int {
+                WorkflowManager.shared.compileMessage = "Saved \"\(name)\" (\(steps) steps)"
+            } else {
+                WorkflowManager.shared.compileMessage = "Workflow saved"
+            }
+            WorkflowManager.shared.lastError = nil
+            WorkflowManager.postToast(WorkflowManager.shared.compileMessage ?? "Workflow saved")
         case "workflows_deleted":
             workflows = []
             if isExecuting {
@@ -364,9 +532,15 @@ final class EngineBridge {
             hudReward = nil
             hudStatus = nil
             let backend = json["backend"] as? String ?? "webkit"
-            if backend == "playwright" {
+            if backend == "browser-use" {
+                executionProgress = "browser-use agent (Chromium)…"
+                let cookies = json["cookiesSynced"] as? Int ?? 0
+                let cookieNote = cookies > 0 ? " · \(cookies) cookies synced" : ""
+                WorkflowManager.postToast("browser-use running — Nook tab mirrors agent\(cookieNote)")
+            } else if backend == "playwright" {
                 executionProgress = "Playwright browser…"
             } else if let webView = resolveExecuteWebView() {
+                await installAutomationHooks(on: webView)
                 await sendExecuteState(webView: webView)
             }
         case "execute_action":
@@ -385,36 +559,40 @@ final class EngineBridge {
                     label: desc,
                     tier: json["tier"] as? Int ?? 1
                 )
+                if currentTrajectoryTask != nil {
+                    trajectoryStepLog.append(
+                        TrajectoryStepLog(
+                            index: step,
+                            actionType: action["type"] as? String ?? "?",
+                            url: resolveExecuteWebView()?.url?.absoluteString ?? ""
+                        )
+                    )
+                }
             }
             guard backend != "playwright",
                   let webView = resolveExecuteWebView(),
                   let action = json["action"] as? [String: Any] else { break }
             OpenHiveObservation.inject(into: webView)
             let actionType = action["type"] as? String ?? ""
-            var (ok, detail) = await BrowserToolExecutor.performWorkflowAction(action, on: webView)
+            var (ok, detail) = await WebViewAutomation.perform(action, on: webView)
             if !ok, actionType == "click", let retryView = resolveExecuteWebView() {
-                try? await Task.sleep(nanoseconds: 900_000_000)
-                let retry = await BrowserToolExecutor.performWorkflowAction(action, on: retryView)
-                if retry.success {
-                    ok = retry.success
-                    detail = retry.detail
-                }
+                try? await Task.sleep(nanoseconds: 600_000_000)
+                let retry = await WebViewAutomation.perform(action, on: retryView)
+                ok = retry.success
+                detail = retry.detail
             }
             if !ok {
                 OpenHiveLogger.error("EngineBridge", "action_failed", data: ["action": action, "detail": detail])
             } else {
                 OpenHiveLogger.log("EngineBridge", "action_ok", data: ["detail": detail])
             }
-            let waitNs: UInt64
-            switch actionType {
-            case "navigate": waitNs = 3_000_000_000
-            case "type", "fill": waitNs = 3_500_000_000
-            default: waitNs = 1_500_000_000
-            }
-            try? await Task.sleep(nanoseconds: waitNs)
+            await WebViewAutomation.waitForSettle(on: webView, actionType: actionType)
             await sendExecuteState(webView: webView, lastActionOk: ok, lastActionDetail: detail)
         case "execute_done":
             isExecuting = false
+            if let webView = executeWebView {
+                await removeAutomationHooks(on: webView)
+            }
             clearExecutionTarget()
             executionProgress = nil
             lastActionDescription = nil
@@ -422,12 +600,67 @@ final class EngineBridge {
             AgentExecutionState.shared.end()
             hudReward = json["reward"] as? Double
             hudStatus = json["hudStatus"] as? String
-            WorkflowManager.shared.onExecuteDone(
-                hudReward: hudReward,
-                hudStatus: hudStatus,
-                hudContent: json["hudContent"] as? String
-            )
+            if currentTrajectoryTask != nil {
+                currentTrajectoryTask = nil
+            } else {
+                WorkflowManager.shared.onExecuteDone(
+                    hudReward: hudReward,
+                    hudStatus: hudStatus,
+                    hudContent: json["hudContent"] as? String
+                )
+            }
             requestTokenMetrics()
+        case "agent_step":
+            let step = json["step"] as? Int ?? trajectoryStepLog.count + 1
+            let actionType = json["action"] as? String ?? "?"
+            let provider = json["provider"] as? String ?? "llm"
+            let model = json["model"] as? String
+            let stepURL = json["url"] as? String ?? ""
+            let label = model.map { "\(provider)/\($0)" } ?? provider
+            lastActionDescription = "[\(label)] \(actionType)"
+            executionProgress = "Agent step \(step): \(actionType)"
+            if json["mirrorUrl"] as? Bool == true,
+               let webView = resolveExecuteWebView(),
+               !stepURL.isEmpty {
+                OpenHiveBrowserSync.mirrorURLIfNeeded(
+                    stepURL,
+                    on: webView,
+                    lastMirrored: &lastMirroredAgentURL,
+                    force: false
+                )
+            }
+            trajectoryStepLog.append(
+                TrajectoryStepLog(
+                    index: step,
+                    actionType: "\(actionType) (\(provider))",
+                    url: stepURL.isEmpty ? (resolveExecuteWebView()?.url?.absoluteString ?? "") : stepURL
+                )
+            )
+        case "trajectory_complete":
+            currentTrajectoryTask = nil
+            isExecuting = false
+            if let finalURL = json["finalUrl"] as? String,
+               json["mirrorUrl"] as? Bool == true,
+               let webView = resolveExecuteWebView(),
+               !finalURL.isEmpty {
+                OpenHiveBrowserSync.mirrorURLIfNeeded(
+                    finalURL,
+                    on: webView,
+                    lastMirrored: &lastMirroredAgentURL,
+                    force: true
+                )
+            }
+            clearExecutionTarget()
+            executionProgress = nil
+            let success = json["success"] as? Bool ?? false
+            let steps = json["steps"] as? Int ?? trajectoryStepLog.count
+            if success {
+                WorkflowManager.postToast("Trajectory complete (\(steps) steps)")
+            } else {
+                let reason = json["reason"] as? String ?? "failed"
+                trajectoryLastError = "Trajectory \(reason)"
+                WorkflowManager.postToast(trajectoryLastError ?? "Trajectory failed", isError: true)
+            }
         case "execute_cancelled":
             isExecuting = false
             clearExecutionTarget()
@@ -439,7 +672,17 @@ final class EngineBridge {
             if isExecuting, msg?.contains("log_event") == true { break }
             connectionError = msg
             if isExecuting {
+                isExecuting = false
+                clearExecutionTarget()
                 WorkflowManager.shared.lastError = msg
+                WorkflowManager.postToast(msg ?? "Engine error", isError: true)
+            } else if currentTrajectoryTask != nil {
+                trajectoryLastError = msg
+                currentTrajectoryTask = nil
+                WorkflowManager.postToast(msg ?? "Trajectory error", isError: true)
+            } else {
+                WorkflowManager.shared.lastError = msg
+                WorkflowManager.postToast(msg ?? "Engine error", isError: true)
             }
         case "exa_search_result":
             if let requestId = json["requestId"] as? String,
@@ -467,13 +710,24 @@ final class EngineBridge {
     }
 
     private func sendExecuteState(webView: WKWebView, lastActionOk: Bool? = nil, lastActionDetail: String? = nil) async {
-        let elements = await BrowserToolExecutor.interactiveElements(from: webView)
-        let tree: [String: Any] = ["elements": elements, "count": elements.count]
+        async let elementsTask = BrowserToolExecutor.interactiveElements(from: webView)
+        async let candidatesTask = BrowserToolExecutor.trajectoryCandidates(from: webView)
+        async let pageTextTask = BrowserToolExecutor.pageText(from: webView)
+        let elements = await elementsTask
+        let candidates = await candidatesTask
+        let pageText = await pageTextTask
+        let tree: [String: Any] = [
+            "elements": elements,
+            "count": elements.count,
+            "candidates": candidates,
+        ]
         var payload: [String: Any] = [
             "type": "execute_state",
             "url": webView.url?.absoluteString ?? "",
             "title": webView.title ?? "",
             "accessibilityTree": tree,
+            "candidates": candidates,
+            "pageText": pageText,
         ]
         if let lastActionOk { payload["lastActionOk"] = lastActionOk }
         if let lastActionDetail { payload["lastActionDetail"] = lastActionDetail }
@@ -484,6 +738,9 @@ final class EngineBridge {
         let type = action["type"] as? String ?? "?"
         switch type {
         case "click":
+            if let ref = action["ref"] as? String, !ref.isEmpty {
+                return "Click: \(ref)"
+            }
             return "Click: \(action["text"] as? String ?? action["name"] as? String ?? "element")"
         case "type", "fill":
             let val = action["value"] as? String ?? action["text"] as? String ?? ""

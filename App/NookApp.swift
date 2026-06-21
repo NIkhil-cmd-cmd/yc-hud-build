@@ -90,6 +90,15 @@ struct NookApp: App {
         }
         .windowResizability(.contentSize)
         .defaultPosition(.center)
+
+        #if DEBUG
+        Window("Trajectory Test", id: "openhive-trajectory-test") {
+            TrajectoryTestView()
+                .environmentObject(browserManager)
+        }
+        .windowResizability(.contentSize)
+        .defaultPosition(.center)
+        #endif
     }
 
     // MARK: - Application Lifecycle Setup

@@ -28,7 +28,23 @@ async def expert_action(
     candidates: list[dict],
 ) -> tuple[dict | None, str, str]:
     """Returns (action_dict, raw_output, provider_name)."""
+    from agent_llm import llm_next_action
+    from executor import _action_from_ref
+
+    summary = {"url": url, "title": title, "text": ""}
+    try:
+        action, meta = await llm_next_action(task, summary, candidates, [], 0)
+        replay = _action_from_ref(action, candidates)
+        if replay:
+            provider = meta.get("provider") or meta.get("source") or "llm"
+            return replay, meta.get("raw", ""), provider
+    except Exception:
+        pass
+
     prompt = _expert_prompt(task, url, title, candidates)
+    action, raw, provider = await _openai_expert(prompt)
+    if action:
+        return action, raw, provider
     action, raw, provider = await _fireworks_deepseek(prompt)
     if action:
         return action, raw, provider
@@ -37,24 +53,36 @@ async def expert_action(
 
 async def fast_action(url: str, title: str, candidates: list[dict], schema: str = "") -> tuple[dict | None, int]:
     """Tier 2 fast model."""
-    api_key = os.environ.get("FIREWORKS_API_KEY")
-    if not api_key:
-        return None, 0
     from openai import AsyncOpenAI
 
-    client = AsyncOpenAI(base_url="https://api.fireworks.ai/inference/v1", api_key=api_key)
     prompt = (
         f"URL: {url}\nTitle: {title}\nSchema: {schema[:500]}\n"
         f"Elements: {json.dumps(candidates[:25], default=str)[:1500]}\n"
         'Return JSON only: {"action":"click","ref":"e0"} or {"action":"type","ref":"e1","value":"text"}'
     )
-    try:
-        r = await client.chat.completions.create(
-            model=os.environ.get("OPENHIVE_T2_MODEL", "accounts/fireworks/models/llama-v3p1-8b-instruct"),
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0,
-            max_tokens=80,
+
+    if os.environ.get("OPENAI_API_KEY"):
+        client = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
+        model = os.environ.get("OPENHIVE_T2_MODEL", "gpt-4o-mini")
+    elif os.environ.get("FIREWORKS_API_KEY"):
+        client = AsyncOpenAI(
+            base_url="https://api.fireworks.ai/inference/v1",
+            api_key=os.environ["FIREWORKS_API_KEY"],
         )
+        model = os.environ.get("OPENHIVE_T2_MODEL", "accounts/fireworks/models/llama-v3p1-8b-instruct")
+    else:
+        return None, 0
+
+    try:
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0,
+            "max_tokens": 80,
+        }
+        if os.environ.get("OPENAI_API_KEY"):
+            kwargs["response_format"] = {"type": "json_object"}
+        r = await client.chat.completions.create(**kwargs)
         text = r.choices[0].message.content or "{}"
         usage = r.usage.total_tokens if r.usage else 200
         action = _parse_action_json(text)
@@ -69,6 +97,28 @@ def _expert_prompt(task: dict, url: str, title: str, candidates: list[dict]) -> 
         f"Candidates:\n{json.dumps(candidates[:40], indent=2)[:6000]}\n"
         'Return strict JSON: {"action":"click|type","ref":"eN","value":"..."}'
     )
+
+
+async def _openai_expert(prompt: str) -> tuple[dict | None, str, str]:
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        return None, "", ""
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(api_key=api_key)
+    model = os.environ.get("OPENHIVE_EXPERT_MODEL") or "gpt-4o-mini"
+    try:
+        r = await client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            max_tokens=120,
+            response_format={"type": "json_object"},
+        )
+        raw = r.choices[0].message.content or ""
+        return _parse_action_json(raw), raw, f"openai/{model}"
+    except Exception:
+        return None, "", ""
 
 
 async def _fireworks_deepseek(prompt: str) -> tuple[dict | None, str, str]:
@@ -128,14 +178,15 @@ def _parse_action_json(text: str) -> dict | None:
             return None
     if "action" in data and "type" not in data:
         data["type"] = data.pop("action")
-    return data if data.get("type") in ("click", "type") else None
+    return data if data.get("type") in ("click", "type", "press", "navigate", "done") else None
 
 
 def deterministic_fallback(task: dict, candidates: list[dict]) -> dict | None:
     """Local rule when expert returns invalid JSON — e.g. type origin into first likely field."""
+    goal = str(task.get("goal") or "")
     origin = task.get("origin") or task.get("departDate") or ""
     dest = task.get("destination") or ""
-    value = str(origin or dest or "")
+    value = str(origin or dest or goal[:40] or "")
     if not value:
         return None
     for c in candidates:

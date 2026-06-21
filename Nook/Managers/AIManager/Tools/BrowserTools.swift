@@ -35,7 +35,7 @@ enum BrowserTools {
 
     static let clickElement = AIToolDefinition(
         name: "clickElement",
-        description: "Click an element on the page using real browser automation (Playwright). Provide EITHER a CSS selector OR the visible text of the element to click. When using text, it finds buttons, links, and inputs whose visible text contains your query.",
+        description: "Click an element in the current Nook tab. Provide EITHER a CSS selector OR the visible text of the element to click. Uses native mouse events for reliable interaction on modern sites.",
         parameters: [
             "type": "object",
             "properties": [
@@ -48,7 +48,7 @@ enum BrowserTools {
 
     static let typeIntoElement = AIToolDefinition(
         name: "typeIntoElement",
-        description: "Type text into an input, textarea, or search box using real keyboard input (Playwright). Use getInteractiveElements first to find the field. Set submit=true to press Enter after typing (useful for search boxes).",
+        description: "Type text into an input, textarea, or search box in the current Nook tab using native keyboard events. Use getInteractiveElements first to find the field. Set submit=true to press Enter after typing.",
         parameters: [
             "type": "object",
             "properties": [

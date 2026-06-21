@@ -55,7 +55,6 @@ struct SidebarAIChat: View {
     @State private var messageText: String = ""
     @State private var showAddModelPopover: Bool = false
     @State private var newModelId: String = ""
-    @State private var pendingSaveName: String?
     @FocusState private var isTextFieldFocused: Bool
 
     private var contrastText: Color {
@@ -108,46 +107,11 @@ struct SidebarAIChat: View {
             headerView
         })
         .safeAreaInset(edge: .bottom) {
-            VStack(spacing: 8) {
-                if let name = pendingSaveName {
-                    SaveWorkflowPromptBanner(
-                        suggestedName: name,
-                        onSave: {
-                            WorkflowManager.shared.saveCurrentSession(name: name)
-                            pendingSaveName = nil
-                        },
-                        onSkip: { pendingSaveName = nil }
-                    )
-                }
-                WorkflowsSidebarSection()
-                    .environmentObject(browserManager)
-                    .environment(windowState)
-                MetricsStripView()
-                AgentRunControlsView()
-                inputAreaView
-            }
+            inputAreaView
         }
         .safeAreaPadding(.top, 8)
         .safeAreaPadding(.bottom, 8)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onChange(of: aiService.isExecutingTools) { _, executing in
-            if executing {
-                AgentExecutionState.shared.begin(label: "Agent working…", tier: 3)
-            } else if EngineBridge.shared.observedStepCount > 0, pendingSaveName == nil {
-                AgentExecutionState.shared.end()
-                let suggestion = WorkflowManager.shared.extractWorkflowName(from: aiService.messages.last(where: { $0.role == .user })?.content ?? "") ?? "Saved workflow"
-                pendingSaveName = suggestion
-            } else {
-                AgentExecutionState.shared.end()
-            }
-        }
-        .onChange(of: EngineBridge.shared.isExecuting) { _, executing in
-            if executing {
-                AgentExecutionState.shared.begin(label: EngineBridge.shared.lastActionDescription, tier: 1)
-            } else if !aiService.isExecutingTools {
-                AgentExecutionState.shared.end()
-            }
-        }
         .onAppear {
             isTextFieldFocused = true
 
@@ -451,9 +415,6 @@ struct SidebarAIChat: View {
         messageText = ""
 
         if WorkflowManager.shared.handleChatCommand(text, browserManager: browserManager, windowState: windowState) {
-            if case .compile(let name) = WorkflowManager.shared.parseChatCommand(text), !name.isEmpty {
-                pendingSaveName = nil
-            }
             return
         }
 

@@ -267,9 +267,6 @@ struct WebsiteView: View {
                     )
             }
             
-            AgentExecutionOverlay()
-                .allowsHitTesting(false)
-            
         }
     }
 

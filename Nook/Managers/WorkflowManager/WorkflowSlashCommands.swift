@@ -16,10 +16,12 @@ enum WorkflowSlashCommand: Equatable {
     case cancel
     case status
     case help
+    case agent(goal: String)
 
     static let catalog: [(command: String, summary: String)] = [
         ("/save [name]", "Save recorded steps as a workflow"),
         ("/run [name]", "Run a saved workflow in the current tab"),
+        ("/agent [goal]", "Run LLM agent on the current tab"),
         ("/workflows", "List saved workflows"),
         ("/delete", "Delete all saved workflows"),
         ("/cancel", "Cancel a running workflow"),
@@ -49,6 +51,8 @@ enum WorkflowSlashCommand: Equatable {
             return .deleteAll
         case "cancel", "stop":
             return .cancel
+        case "agent", "a":
+            return .agent(goal: arg)
         case "status", "st":
             return .status
         case "help", "h", "?":
@@ -120,6 +124,33 @@ enum WorkflowSlashCommandExecutor {
             )
             return true
 
+        case .agent(let goal):
+            guard !goal.isEmpty else {
+                workflows.lastError = "Usage: /agent [goal — e.g. book BOS to LAX July 15]"
+                return true
+            }
+            guard engine.isConnected else {
+                workflows.lastError = "Engine offline — run ./scripts/start_engine.sh"
+                return true
+            }
+            guard let tab = browserManager.currentTabForActiveWindow(),
+                  let windowId = browserManager.windowRegistry?.activeWindow?.id,
+                  let webView = browserManager.getWebView(for: tab.id, in: windowId)
+            else {
+                workflows.lastError = "Select a tab first"
+                return true
+            }
+            tab.isOpenHiveNewTab = false
+            workflows.compileMessage = "Agent running: \(goal.prefix(60))…"
+            engine.startAgentTask(
+                goal: goal,
+                webView: webView,
+                tabId: tab.id,
+                windowId: windowId,
+                browserManager: browserManager
+            )
+            return true
+
         case .list:
             if engine.workflows.isEmpty {
                 workflows.compileMessage = "No workflows saved yet"
@@ -136,6 +167,7 @@ enum WorkflowSlashCommandExecutor {
 
         case .cancel:
             workflows.cancelExecution()
+            EngineBridge.shared.cancelTrajectory()
             workflows.compileMessage = "Cancelled"
             return true
 

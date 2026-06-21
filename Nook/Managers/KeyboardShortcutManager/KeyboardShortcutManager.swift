@@ -540,6 +540,7 @@ class KeyboardShortcutManager {
                 NotificationCenter.default.post(name: .organizeTabsRequested, object: nil)
             case .saveWorkflow:
                 WorkflowManager.shared.saveCurrentSession(name: "Saved workflow")
+                browserManager.showWorkflowStatus()
             }
         }
     }

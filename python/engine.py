@@ -35,6 +35,8 @@ _executors: dict[str, PolicyExecutor] = {}
 _exec_meta: dict[str, dict[str, Any]] = {}
 _playwright_runners: dict[int, PlaywrightRunner] = {}
 _playwright_tasks: dict[int, asyncio.Task] = {}
+_trajectory_sessions: dict[int, Any] = {}
+_trajectory_tasks: dict[int, asyncio.Task] = {}
 
 
 async def _finish_execution(
@@ -114,7 +116,11 @@ async def _finish_execution(
 
 
 def _use_playwright() -> bool:
-    return os.environ.get("OPENHIVE_USE_PLAYWRIGHT", "1") == "1"
+    return os.environ.get("OPENHIVE_USE_PLAYWRIGHT", "0") == "1"
+
+
+def _use_browser_use() -> bool:
+    return os.environ.get("OPENHIVE_USE_BROWSER_USE", "1") != "0"
 
 
 async def _cancel_playwright_execution(conn_id: int) -> None:
@@ -542,6 +548,11 @@ async def handle(ws: websockets.WebSocketServerProtocol) -> None:
                         )
 
                 case "execute_state":
+                    traj = _trajectory_sessions.get(conn_id)
+                    if traj is not None and traj.is_running:
+                        traj.on_execute_state(msg)
+                        continue
+
                     # Legacy WebKit ping-pong path (kept for compatibility; Playwright runs server-side)
                     executor = _executors.get(conn_id)
                     meta = _exec_meta.get(conn_id, {})
@@ -614,6 +625,105 @@ async def handle(ws: websockets.WebSocketServerProtocol) -> None:
 
                 case "cancel_execute":
                     await _cancel_playwright_execution(conn_id)
+                    traj_task = _trajectory_tasks.pop(conn_id, None)
+                    if traj_task and not traj_task.done():
+                        traj_task.cancel()
+                    _trajectory_sessions.pop(conn_id, None)
+                    await _send(ws, {"type": "execute_cancelled"})
+
+                case "start_trajectory":
+                    from browser_use_runner import browser_use_enabled, run_flight_trajectory
+                    from trajectory_runner import TrajectorySession
+
+                    _executors.pop(conn_id, None)
+                    _exec_meta.pop(conn_id, None)
+                    task = msg.get("task") or {}
+                    required = ("origin", "destination", "departDate")
+                    if any(not task.get(k) for k in required):
+                        await _send(ws, {"type": "error", "message": "Trajectory task missing origin/destination/departDate"})
+                        continue
+                    existing = _trajectory_tasks.get(conn_id)
+                    if existing and not existing.done():
+                        await _send(ws, {"type": "error", "message": "Trajectory already running"})
+                        continue
+
+                    send_fn = lambda payload: _send(ws, payload)
+                    ctx = msg.get("storageState") if isinstance(msg.get("storageState"), dict) else None
+                    max_steps = int(msg.get("maxSteps") or os.environ.get("OPENHIVE_AGENT_MAX_STEPS", "40"))
+
+                    async def _run_trajectory() -> None:
+                        try:
+                            if browser_use_enabled():
+                                await run_flight_trajectory(
+                                    send_fn,
+                                    task,
+                                    storage_state=ctx,
+                                    page_url=msg.get("pageUrl") or msg.get("startUrl"),
+                                    page_title=msg.get("pageTitle"),
+                                    max_steps=max_steps,
+                                )
+                            else:
+                                session = TrajectorySession(send_fn)
+                                _trajectory_sessions[conn_id] = session
+                                await session.run(task, max_steps=max_steps)
+                        finally:
+                            _trajectory_sessions.pop(conn_id, None)
+                            _trajectory_tasks.pop(conn_id, None)
+
+                    _trajectory_tasks[conn_id] = asyncio.create_task(_run_trajectory())
+
+                case "start_agent":
+                    from agent_loop import AgentTaskSession
+                    from browser_use_runner import browser_use_enabled, run_browser_use_task
+
+                    _executors.pop(conn_id, None)
+                    _exec_meta.pop(conn_id, None)
+                    goal = (msg.get("goal") or msg.get("task") or "").strip()
+                    if not goal and isinstance(msg.get("task"), dict):
+                        goal = msg["task"].get("goal") or ""
+                    if not goal:
+                        await _send(ws, {"type": "error", "message": "Agent task requires a goal string"})
+                        continue
+                    existing = _trajectory_tasks.get(conn_id)
+                    if existing and not existing.done():
+                        await _send(ws, {"type": "error", "message": "Agent already running"})
+                        continue
+
+                    task = msg.get("task") if isinstance(msg.get("task"), dict) else {"goal": goal}
+                    if "goal" not in task:
+                        task["goal"] = goal
+                    start_url = msg.get("startUrl") or msg.get("url")
+                    max_steps = int(msg.get("maxSteps") or os.environ.get("OPENHIVE_AGENT_MAX_STEPS", "40"))
+                    ctx = msg.get("storageState") if isinstance(msg.get("storageState"), dict) else None
+                    send_fn = lambda payload: _send(ws, payload)
+
+                    async def _run_agent() -> None:
+                        try:
+                            if browser_use_enabled():
+                                await run_browser_use_task(
+                                    send_fn,
+                                    goal,
+                                    start_url=start_url,
+                                    page_url=msg.get("pageUrl") or start_url,
+                                    page_title=msg.get("pageTitle"),
+                                    storage_state=ctx,
+                                    max_steps=max_steps,
+                                )
+                            else:
+                                session = AgentTaskSession(send_fn)
+                                _trajectory_sessions[conn_id] = session
+                                await session.run(task, max_steps=max_steps, start_url=start_url)
+                        finally:
+                            _trajectory_sessions.pop(conn_id, None)
+                            _trajectory_tasks.pop(conn_id, None)
+
+                    _trajectory_tasks[conn_id] = asyncio.create_task(_run_agent())
+
+                case "cancel_trajectory":
+                    traj_task = _trajectory_tasks.pop(conn_id, None)
+                    if traj_task and not traj_task.done():
+                        traj_task.cancel()
+                    _trajectory_sessions.pop(conn_id, None)
                     await _send(ws, {"type": "execute_cancelled"})
 
                 case "list_workflows":

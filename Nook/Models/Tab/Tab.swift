@@ -670,6 +670,8 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
             _webView?.configuration.userContentController.removeScriptMessageHandler(
                 forName: "historyStateDidChange")
             _webView?.configuration.userContentController.removeScriptMessageHandler(
+                forName: "openhiveObserve")
+            _webView?.configuration.userContentController.removeScriptMessageHandler(
                 forName: "NookIdentity")
             _webView?.configuration.userContentController.removeScriptMessageHandler(
                 forName: "nookWebStore")
@@ -3336,6 +3338,16 @@ extension Tab: WKUIDelegate {
     ) -> WKWebView? {
         guard let bm = browserManager else { return nil }
 
+        // During workflow/trajectory replay, keep everything in the same tab.
+        if EngineBridge.shared.shouldCapturePopup(for: self.id),
+           let url = navigationAction.request.url,
+           let scheme = url.scheme,
+           !scheme.isEmpty,
+           url.absoluteString != "about:blank" {
+            webView.load(URLRequest(url: url))
+            return nil
+        }
+
         // OAuth and signin flows should open in a miniwindow for better UX
         // The miniwindow handles OAuth completion detection and notifies the parent tab
         // Skip this for extension-originated navigations — extensions manage their own auth flows
@@ -3426,6 +3438,12 @@ extension Tab: WKUIDelegate {
         newWebView.configuration.userContentController.removeScriptMessageHandler(
             forName: "historyStateDidChange")
         newWebView.configuration.userContentController.removeScriptMessageHandler(
+            forName: "openhiveObserve")
+        newWebView.configuration.userContentController.removeScriptMessageHandler(
+            forName: "mediaStateChange_\(id.uuidString)")
+        newWebView.configuration.userContentController.removeScriptMessageHandler(
+            forName: "backgroundColor_\(id.uuidString)")
+        newWebView.configuration.userContentController.removeScriptMessageHandler(
             forName: "NookIdentity")
         newWebView.configuration.userContentController.removeScriptMessageHandler(
             forName: "nookAdBlocker")
@@ -3472,7 +3490,7 @@ extension Tab: WKUIDelegate {
         let handlerNames = ["linkHover", "commandHover", "commandClick", "pipStateChange",
                            "mediaStateChange_\(tab.id.uuidString)",
                            "backgroundColor_\(tab.id.uuidString)",
-                           "historyStateDidChange", "NookIdentity", "nookAdBlocker"]
+                           "historyStateDidChange", "openhiveObserve", "NookIdentity", "nookAdBlocker"]
 
         for handlerName in handlerNames {
             userContentController.removeScriptMessageHandler(forName: handlerName)

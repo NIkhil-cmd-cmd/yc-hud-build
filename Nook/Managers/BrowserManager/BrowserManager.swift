@@ -600,6 +600,16 @@ class BrowserManager: ObservableObject {
             }
         }
 
+        NotificationCenter.default.addObserver(
+            forName: .openHiveShowWorkflowToast,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let message = note.userInfo?["message"] as? String else { return }
+            let isError = note.userInfo?["isError"] as? Bool ?? false
+            self?.showWorkflowToast(message, isError: isError)
+        }
+
     }
 
     // objectWillChange forwarding removed — TabManager and PeekManager are now
@@ -928,7 +938,7 @@ class BrowserManager: ObservableObject {
     }
 
     /// Create a new tab and set it as active in the specified window
-    func createNewTab(in windowState: BrowserWindowState, url: String = "about:blank") {
+    func createNewTab(in windowState: BrowserWindowState, url: String = "https://www.google.com") {
         // Handle incognito windows - create ephemeral tabs
         if windowState.isIncognito, let profile = windowState.ephemeralProfile {
             let template = nookSettings?.resolvedSearchEngineTemplate ?? SearchProvider.google.queryTemplate
@@ -1599,6 +1609,31 @@ class BrowserManager: ObservableObject {
         alert.alertStyle = .informational
         alert.addButton(withTitle: "OK")
         alert.runModal()
+    }
+
+    // MARK: - Workflow Toast
+
+    func showWorkflowToast(_ message: String, isError: Bool = false, in windowState: BrowserWindowState? = nil) {
+        guard !message.isEmpty else { return }
+        guard let targetWindow = windowState ?? windowRegistry?.activeWindow else { return }
+        let windowId = targetWindow.id
+        targetWindow.workflowToastMessage = message
+        targetWindow.workflowToastIsError = isError
+        targetWindow.isShowingWorkflowToast = true
+
+        Task { [weak targetWindow] in
+            try? await Task.sleep(for: .seconds(3))
+            guard let targetWindow, targetWindow.id == windowId else { return }
+            targetWindow.isShowingWorkflowToast = false
+        }
+    }
+
+    func showWorkflowStatus(from workflows: WorkflowManager = .shared, in windowState: BrowserWindowState? = nil) {
+        if let error = workflows.lastError {
+            showWorkflowToast(error, isError: true, in: windowState)
+        } else if let message = workflows.compileMessage {
+            showWorkflowToast(message, in: windowState)
+        }
     }
 
     // MARK: - Profile Switch Toast

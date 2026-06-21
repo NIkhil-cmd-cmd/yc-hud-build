@@ -80,6 +80,11 @@ class BrowserWindowState {
     
     /// Presentation flag for the copy URL toast
     var isShowingCopyURLToast: Bool = false
+
+    /// OpenHive workflow save/run feedback toast
+    var isShowingWorkflowToast: Bool = false
+    var workflowToastMessage: String?
+    var workflowToastIsError: Bool = false
     
     /// Presentation flag for the shortcut conflict toast
     var isShowingShortcutConflictToast: Bool = false

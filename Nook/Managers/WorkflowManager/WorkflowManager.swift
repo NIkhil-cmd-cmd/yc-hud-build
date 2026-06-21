@@ -7,6 +7,10 @@ import Foundation
 import OSLog
 import WebKit
 
+extension Notification.Name {
+    static let openHiveShowWorkflowToast = Notification.Name("openHiveShowWorkflowToast")
+}
+
 enum OpenHiveChatCommand: Equatable {
     case notHandled
     case compile(name: String)
@@ -32,6 +36,14 @@ final class WorkflowManager {
 
     private init() {}
 
+    static func postToast(_ message: String, isError: Bool = false) {
+        NotificationCenter.default.post(
+            name: .openHiveShowWorkflowToast,
+            object: nil,
+            userInfo: ["message": message, "isError": isError]
+        )
+    }
+
     func parseChatCommand(_ text: String) -> OpenHiveChatCommand {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         OpenHiveLogger.log("WorkflowManager", "parseChatCommand", data: ["text": text])
@@ -53,6 +65,7 @@ final class WorkflowManager {
                 return .run(workflowId: wf.id, workflowName: wf.name)
             }
             lastError = "No workflow matching \"\(query)\""
+            Self.postToast(lastError ?? "", isError: true)
             return .notHandled
         }
 
@@ -60,12 +73,13 @@ final class WorkflowManager {
             compileMessage = EngineBridge.shared.workflows.isEmpty
                 ? "No workflows saved yet"
                 : EngineBridge.shared.workflows.map(\.name).joined(separator: ", ")
-            return .compile(name: "") // handled without compile
+            Self.postToast(compileMessage ?? "")
+            return .handledLocally
         }
 
         if lower.contains("delete all workflow") || lower == "clear workflows" {
             deleteAllWorkflows()
-            return .compile(name: "")
+            return .handledLocally
         }
 
         return .notHandled
@@ -74,23 +88,44 @@ final class WorkflowManager {
     func handleChatCommand(_ text: String, browserManager: BrowserManager? = nil, windowState: BrowserWindowState? = nil) -> Bool {
         if WorkflowSlashCommand.parse(text).isHandled {
             guard let browserManager else { return true }
-            return WorkflowSlashCommandExecutor.execute(text, browserManager: browserManager)
+            let handled = WorkflowSlashCommandExecutor.execute(text, browserManager: browserManager)
+            browserManager.showWorkflowStatus(in: windowState)
+            return handled
         }
 
         switch parseChatCommand(text) {
         case .notHandled:
             return false
         case .handledLocally:
+            browserManager?.showWorkflowStatus(in: windowState)
             return true
         case .compile(let name):
-            if name.isEmpty { return true }
+            if !EngineBridge.shared.isConnected {
+                lastError = "Engine offline — run ./scripts/start_engine.sh"
+                Self.postToast(lastError ?? "", isError: true)
+                browserManager?.showWorkflowStatus(in: windowState)
+                return true
+            }
+            if EngineBridge.shared.observedStepCount == 0 {
+                lastError = "No steps recorded yet — browse and interact first"
+                Self.postToast(lastError ?? "", isError: true)
+                browserManager?.showWorkflowStatus(in: windowState)
+                return true
+            }
             EngineBridge.shared.compileWorkflow(name: name)
             compileMessage = "Compiling \(name)..."
+            Self.postToast(compileMessage ?? "")
+            browserManager?.showWorkflowStatus(in: windowState)
             return true
         case .run(let workflowId, let workflowName):
             guard let browserManager, let windowState,
                   let tab = browserManager.currentTab(for: windowState),
-                  let webView = tab.assignedWebView else { return true }
+                  let webView = tab.assignedWebView else {
+                lastError = "Select a tab first"
+                Self.postToast(lastError ?? "", isError: true)
+                browserManager?.showWorkflowStatus(in: windowState)
+                return true
+            }
             execute(
                 workflowId: workflowId,
                 webView: webView,
@@ -99,6 +134,8 @@ final class WorkflowManager {
                 browserManager: browserManager
             )
             compileMessage = "Running \(workflowName)…"
+            Self.postToast(compileMessage ?? "")
+            browserManager.showWorkflowStatus(in: windowState)
             return true
         }
     }
@@ -125,8 +162,19 @@ final class WorkflowManager {
     }
 
     func saveCurrentSession(name: String = "Saved workflow") {
+        guard EngineBridge.shared.isConnected else {
+            lastError = "Engine offline — run ./scripts/start_engine.sh"
+            Self.postToast(lastError ?? "", isError: true)
+            return
+        }
+        if EngineBridge.shared.observedStepCount == 0 {
+            lastError = "No steps recorded yet — browse and interact first"
+            Self.postToast(lastError ?? "", isError: true)
+            return
+        }
         EngineBridge.shared.compileWorkflow(name: name)
-        compileMessage = "Compiling..."
+        compileMessage = "Compiling \(name)..."
+        Self.postToast(compileMessage ?? "")
     }
 
     func execute(
@@ -163,6 +211,7 @@ final class WorkflowManager {
     func deleteAllWorkflows() {
         guard !isExecuting else {
             lastError = "Cancel the running workflow first"
+            Self.postToast(lastError ?? "", isError: true)
             return
         }
         lastError = nil
@@ -174,6 +223,7 @@ final class WorkflowManager {
         executeWebView = nil
         lastError = nil
         compileMessage = count == 0 ? "No workflows to delete" : "Deleted \(count) workflow\(count == 1 ? "" : "s")"
+        Self.postToast(compileMessage ?? "")
     }
 
     func onExecuteDone(hudReward: Double? = nil, hudStatus: String? = nil, hudContent: String? = nil) {
@@ -187,6 +237,7 @@ final class WorkflowManager {
         } else {
             compileMessage = "Workflow finished"
         }
+        Self.postToast(compileMessage ?? "")
         TokenDashboardManager.shared.clearLiveRun()
     }
 }
