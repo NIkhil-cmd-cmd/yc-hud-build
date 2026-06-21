@@ -52,7 +52,7 @@ class AIService {
 
     /// Mutating tools that always require explicit user approval in `.askBeforeExecuting` mode
     private static let mutatingTools: Set<String> = [
-        "executeJavaScript", "navigateToURL", "clickElement", "createTab", "switchTab"
+        "executeJavaScript", "navigateToURL", "clickElement", "typeIntoElement", "createTab", "switchTab"
     ]
 
     init(configService: AIConfigService) {

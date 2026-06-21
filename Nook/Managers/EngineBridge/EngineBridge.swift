@@ -42,6 +42,7 @@ final class EngineBridge {
     private var executeWindowId: UUID?
     private weak var executeBrowserManager: BrowserManager?
     private var pendingExaSearches: [String: (Result<String, Error>) -> Void] = [:]
+    private var pendingAgentActions: [String: CheckedContinuation<(success: Bool, detail: String, resultURL: String?), Never>] = [:]
     private var outboundQueue: [[String: Any]] = []
     private var socketReady = false
     private var isConnecting = false
@@ -191,6 +192,34 @@ final class EngineBridge {
 
     func exaSearch(query: String, completion: @escaping (Result<String, Error>) -> Void) {
         exaSearch(query: query, timeoutSeconds: 10, completion: completion)
+    }
+
+    /// Run click/type/navigate in headed Playwright Chromium (real mouse + keyboard).
+    func performAgentAction(
+        pageURL: String?,
+        action: [String: Any],
+        timeoutSeconds: TimeInterval = 45
+    ) async -> (success: Bool, detail: String, resultURL: String?) {
+        guard isConnected else {
+            return (false, "Engine not connected — run ./scripts/start_engine.sh", nil)
+        }
+        return await withCheckedContinuation { continuation in
+            let requestId = UUID().uuidString
+            pendingAgentActions[requestId] = continuation
+            var payload: [String: Any] = [
+                "type": "agent_action",
+                "requestId": requestId,
+                "action": action,
+            ]
+            if let pageURL, !pageURL.isEmpty { payload["url"] = pageURL }
+            send(payload)
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
+                if let cont = pendingAgentActions.removeValue(forKey: requestId) {
+                    cont.resume(returning: (false, "Playwright action timed out", nil))
+                }
+            }
+        }
     }
 
     func relayLog(component: String, message: String, data: [String: Any]) {
@@ -350,7 +379,12 @@ final class EngineBridge {
                         ? "Playwright \(step)/\(total)"
                         : "Step \(step)/\(total)"
                 }
-                lastActionDescription = describeAction(action)
+                let desc = describeAction(action)
+                lastActionDescription = desc
+                AgentExecutionState.shared.update(
+                    label: desc,
+                    tier: json["tier"] as? Int ?? 1
+                )
             }
             guard backend != "playwright",
                   let webView = resolveExecuteWebView(),
@@ -385,6 +419,7 @@ final class EngineBridge {
             executionProgress = nil
             lastActionDescription = nil
             connectionError = nil
+            AgentExecutionState.shared.end()
             hudReward = json["reward"] as? Double
             hudStatus = json["hudStatus"] as? String
             WorkflowManager.shared.onExecuteDone(
@@ -413,6 +448,17 @@ final class EngineBridge {
                     completion(.failure(NSError(domain: "OpenHive", code: 1, userInfo: [NSLocalizedDescriptionKey: err])))
                 } else {
                     completion(.success(json["answer"] as? String ?? ""))
+                }
+            }
+        case "agent_action_result":
+            if let requestId = json["requestId"] as? String,
+               let continuation = pendingAgentActions.removeValue(forKey: requestId) {
+                if let err = json["error"] as? String {
+                    continuation.resume(returning: (false, err, json["url"] as? String))
+                } else {
+                    let ok = json["ok"] as? Bool ?? false
+                    let detail = json["detail"] as? String ?? (ok ? "OK" : "Failed")
+                    continuation.resume(returning: (ok, detail, json["url"] as? String))
                 }
             }
         default:

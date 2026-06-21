@@ -279,7 +279,10 @@ class PlaywrightRunner:
         try:
             await loc.wait_for(state="visible", timeout=5_000)
             await loc.scroll_into_view_if_needed(timeout=5_000)
-            await loc.click(timeout=8_000)
+            try:
+                await loc.click(timeout=8_000)
+            except Exception:
+                await loc.click(timeout=8_000, force=True)
             await asyncio.sleep(0.25)
             return True, f"Clicked {label}"
         except Exception:

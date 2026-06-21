@@ -41,104 +41,77 @@ struct SpacesList: View {
             } action: { newWidth in
                 availableWidth = newWidth
             }
-            .overlay {
-                HStack(spacing: 0) {
-                    ForEach(Array(visibleSpaces.enumerated()), id: \.element.id) { index, space in
-                        SpacesListItem(
-                            space: space,
-                            isActive: windowState.currentSpaceId == space.id,
-                            compact: layoutMode == .compact,
-                            isFaded: false,
-                            onHoverChange: { isHovering in
-                                handleHoverChange(isHovering, for: space)
+            .overlay{
+                    HStack(spacing: 0) {
+                        ForEach(Array(visibleSpaces.enumerated()), id: \.element.id) { index, space in
+                            SpacesListItem(
+                                space: space,
+                                isActive: windowState.currentSpaceId == space.id,
+                                compact: layoutMode == .compact,
+                                isFaded: false,
+                                onHoverChange: { isHovering in
+                                    if isHovering {
+                                        hoveredSpaceId = space.id
+                                        if showPreview {
+                                        } else {
+                                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+                                                if hoveredSpaceId == space.id && isHoveringList {
+                                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                                        showPreview = true
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    } else if hoveredSpaceId == space.id {
+                                        hoveredSpaceId = nil
+                                    }
+                                }
+                            )
+                            .environmentObject(browserManager)
+                            .environment(windowState)
+                            .id(space.id)
+                            .transition(.asymmetric(
+                                insertion: .scale.combined(with: .opacity),
+                                removal: .scale.combined(with: .opacity)
+                            ))
+                            
+                            if index != visibleSpaces.count - 1 {
+                                Spacer()
+                                    .frame(minWidth: 1, maxWidth: 8)
+                                    .layoutPriority(-1)
                             }
-                        )
-                        .environmentObject(browserManager)
-                        .environment(windowState)
-                        .id(space.id)
-                        .transition(.asymmetric(
-                            insertion: .scale.combined(with: .opacity),
-                            removal: .scale.combined(with: .opacity)
-                        ))
-
-                        if index != visibleSpaces.count - 1 {
-                            Spacer()
-                                .frame(minWidth: 1, maxWidth: 8)
-                                .layoutPriority(-1)
                         }
                     }
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 6)
-                .background {
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(.ultraThinMaterial)
-                }
-                .overlay {
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(.white.opacity(0.08), lineWidth: 1)
-                }
-                .onHoverTracking { hovering in
-                    isHoveringList = hovering
-                    if !hovering {
-                        hideHoverPreview()
+                    .onHoverTracking { hovering in
+                        isHoveringList = hovering
+                        if !hovering {
+                            showPreview = false
+                            hoveredSpaceId = nil
+                        }
                     }
-                }
-                .overlay(alignment: .top) {
-                    if showPreview,
-                       let hoveredId = hoveredSpaceId,
-                       hoveredId != windowState.currentSpaceId,
-                       let hoveredSpace = visibleSpaces.first(where: { $0.id == hoveredId }) {
-                        Text(hoveredSpace.name)
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(previewTextColor)
-                            .lineLimit(1)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 5)
-                            .background {
-                                Capsule(style: .continuous)
-                                    .fill(.ultraThinMaterial)
-                            }
-                            .overlay {
-                                Capsule(style: .continuous)
-                                    .strokeBorder(.white.opacity(0.08), lineWidth: 1)
-                            }
-                            .transition(.scale.combined(with: .opacity))
-                            .offset(y: -20)
+                    .overlay(alignment: .top) {
+                        if showPreview,
+                           let hoveredId = hoveredSpaceId,
+                           hoveredId != windowState.currentSpaceId,
+                           let hoveredSpace = visibleSpaces.first(where: { $0.id == hoveredId }) {
+                            Text(hoveredSpace.name)
+                                .font(.caption)
+                                .foregroundStyle(previewTextColor)
+                                .opacity(0.7)
+                                .lineLimit(1)
+                                .id(hoveredSpace.id)
+                                .transition(.blur.animation(.smooth(duration: 0.2)))
+                                .offset(y: -20)
+                        }
                     }
-                }
             }
-            .animation(.easeInOut(duration: 0.25), value: visibleSpaces.count)
+            .animation(.easeInOut(duration: 0.3), value: visibleSpaces.count)
     }
 
     private var previewTextColor: Color {
         browserManager.gradientColorManager.isDark
             ? AppColors.spaceTabTextDark
             : AppColors.spaceTabTextLight
-    }
-
-    private func handleHoverChange(_ isHovering: Bool, for space: Space) {
-        if isHovering {
-            hoveredSpaceId = space.id
-            scheduleHoverPreview(for: space.id)
-        } else if hoveredSpaceId == space.id {
-            hideHoverPreview()
-        }
-    }
-
-    private func scheduleHoverPreview(for spaceId: UUID) {
-        showPreview = false
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
-            guard hoveredSpaceId == spaceId, isHoveringList else { return }
-            withAnimation(.easeInOut(duration: 0.2)) {
-                showPreview = true
-            }
-        }
-    }
-
-    private func hideHoverPreview() {
-        showPreview = false
-        hoveredSpaceId = nil
     }
 
 }

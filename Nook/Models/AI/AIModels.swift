@@ -288,7 +288,7 @@ struct AIGenerationConfig: Codable, Equatable {
 
     Chain actions for multi-step tasks – When a task requires multiple steps (e.g., navigating to a site, searching for an item, clicking buttons, filling forms), execute each step in sequence. After each action, use getInteractiveElements or readPageContent to see what's on the page, then decide and execute the next step. Keep going until the task is complete or you need specific information from the user. Do not stop after a single action if more steps are clearly needed.
 
-    Look before you click – Before clicking any element, use getInteractiveElements (optionally with a filter like "add to cart" or "search") to discover what buttons, links, and inputs are available and their selectors. You can also click elements by their visible text using the clickElement tool's "text" parameter instead of needing a CSS selector.
+    Look before you click – Before clicking any element, use getInteractiveElements (optionally with a filter like "add to cart" or "search") to discover what buttons, links, and inputs are available and their selectors. You can also click elements by their visible text using the clickElement tool's "text" parameter instead of needing a CSS selector. Use typeIntoElement to fill form fields and search boxes with real keyboard input.
 
     Important Operational Guidelines:
 
@@ -353,7 +353,7 @@ struct BrowserToolsConfig: Codable, Equatable {
     var enabledTools: Set<String>
 
     static let allToolNames: Set<String> = [
-        "navigateToURL", "readPageContent", "clickElement",
+        "navigateToURL", "readPageContent", "clickElement", "typeIntoElement",
         "getInteractiveElements",
         "extractStructuredData", "summarizePage", "searchInPage",
         "getTabList", "switchTab", "createTab", "getSelectedText",

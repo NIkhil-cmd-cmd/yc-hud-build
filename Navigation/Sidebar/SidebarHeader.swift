@@ -38,6 +38,7 @@ struct SidebarHeader: View {
         SidebarWindowControlsView()
             .environmentObject(browserManager)
             .environment(windowState)
+            .padding(.horizontal, 8)
     }
 
     private var navigationButtons: some View {
@@ -63,6 +64,9 @@ struct SidebarWindowControlsView: View {
 
     var body: some View {
         HStack(spacing: 8) {
+            MacButtonsView()
+                .frame(width: 70)
+
             Button("Toggle Sidebar", systemImage: nookSettings.sidebarPosition == .left ? "sidebar.left" : "sidebar.right") {
                 browserManager.toggleSidebar(for: windowState, floatingVisible: hoverSidebarManager.isOverlayVisible)
             }
@@ -79,18 +83,8 @@ struct SidebarWindowControlsView: View {
                 .foregroundStyle(Color.primary)
             }
 
-            Spacer(minLength: 0)
+            Spacer()
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .frame(height: 32)
-        .background {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(.ultraThinMaterial)
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(.white.opacity(0.08), lineWidth: 1)
-        }
+        .frame(height: 28)
     }
 }

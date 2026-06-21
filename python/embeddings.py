@@ -46,13 +46,22 @@ async def _embed(text: str) -> list[float]:
     from openai import AsyncOpenAI
 
     client = AsyncOpenAI(api_key=api_key)
-    resp = await client.embeddings.create(
-        model="text-embedding-3-small",
-        input=text[:8000],
-    )
-    vec = resp.data[0].embedding
-    _cache[key] = vec
-    return vec
+    try:
+        resp = await client.embeddings.create(
+            model="text-embedding-3-small",
+            input=text[:8000],
+        )
+        vec = resp.data[0].embedding
+        _cache[key] = vec
+        return vec
+    except Exception:
+        from log_config import log_event, setup_logging
+
+        log_event(setup_logging("openhive.embeddings"), "embed_fallback_stub", text_len=len(text))
+        h = int(hashlib.sha256(text.encode()).hexdigest()[:8], 16)
+        stub = [(h >> (i % 24)) & 0xFF for i in range(1536)]
+        _cache[key] = stub
+        return stub
 
 
 def cosine(a: list[float], b: list[float]) -> float:

@@ -45,12 +45,6 @@ struct URLCitation: Identifiable, Equatable, Codable {
 }
 
 struct SidebarAIChat: View {
-    private enum SidebarMode: String, CaseIterable, Identifiable {
-        case workflows = "Workflows"
-        case assistant = "Assistant"
-        var id: String { rawValue }
-    }
-
     @Environment(BrowserWindowState.self) private var windowState
     @EnvironmentObject var browserManager: BrowserManager
     @EnvironmentObject var gradientColorManager: GradientColorManager
@@ -59,9 +53,9 @@ struct SidebarAIChat: View {
     @Environment(AIConfigService.self) var configService
 
     @State private var messageText: String = ""
-    @State private var sidebarMode: SidebarMode = .workflows
     @State private var showAddModelPopover: Bool = false
     @State private var newModelId: String = ""
+    @State private var pendingSaveName: String?
     @FocusState private var isTextFieldFocused: Bool
 
     private var contrastText: Color {
@@ -70,60 +64,14 @@ struct SidebarAIChat: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if sidebarMode == .workflows {
-                ScrollView {
-                    WorkflowsPanelView(style: .compact)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                chatBody
-            }
-        }
-        .safeAreaInset(edge: .top, content: {
-            headerView
-        })
-        .safeAreaInset(edge: .bottom) {
-            if sidebarMode == .assistant {
-                inputAreaView
-            }
-        }
-        .safeAreaPadding(.top, 8)
-        .safeAreaPadding(.bottom, 8)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onAppear {
-            if sidebarMode == .assistant {
-                isTextFieldFocused = true
-            }
-            if configService.activeProviderType == .ollama {
-                Task { await configService.fetchOllamaModels() }
-            }
-        }
-        .onChange(of: sidebarMode) { _, mode in
-            if mode == .assistant {
-                isTextFieldFocused = true
-            }
-        }
-        .onChange(of: configService.config.activeProviderId) { _, _ in
-            if configService.activeProviderType == .ollama {
-                Task { await configService.fetchOllamaModels() }
-            }
-        }
-    }
-
-    private var chatBody: some View {
-        VStack(spacing: 0) {
             // Messages area
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 12) {
-                        if aiService.messages.isEmpty {
-                            if !aiService.hasApiKey {
-                                apiKeyRequiredView
-                            } else {
-                                emptyStateView
-                            }
+                        if !aiService.hasApiKey {
+                            apiKeyRequiredView
+                        } else if aiService.messages.isEmpty {
+                            emptyStateView
                         } else {
                             ForEach(aiService.messages) { message in
                                 MessageBubble(message: message)
@@ -156,6 +104,62 @@ struct SidebarAIChat: View {
                 }.ignoresSafeArea()
             }
         }
+        .safeAreaInset(edge: .top, content: {
+            headerView
+        })
+        .safeAreaInset(edge: .bottom) {
+            VStack(spacing: 8) {
+                if let name = pendingSaveName {
+                    SaveWorkflowPromptBanner(
+                        suggestedName: name,
+                        onSave: {
+                            WorkflowManager.shared.saveCurrentSession(name: name)
+                            pendingSaveName = nil
+                        },
+                        onSkip: { pendingSaveName = nil }
+                    )
+                }
+                WorkflowsSidebarSection()
+                    .environmentObject(browserManager)
+                    .environment(windowState)
+                MetricsStripView()
+                AgentRunControlsView()
+                inputAreaView
+            }
+        }
+        .safeAreaPadding(.top, 8)
+        .safeAreaPadding(.bottom, 8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onChange(of: aiService.isExecutingTools) { _, executing in
+            if executing {
+                AgentExecutionState.shared.begin(label: "Agent working…", tier: 3)
+            } else if EngineBridge.shared.observedStepCount > 0, pendingSaveName == nil {
+                AgentExecutionState.shared.end()
+                let suggestion = WorkflowManager.shared.extractWorkflowName(from: aiService.messages.last(where: { $0.role == .user })?.content ?? "") ?? "Saved workflow"
+                pendingSaveName = suggestion
+            } else {
+                AgentExecutionState.shared.end()
+            }
+        }
+        .onChange(of: EngineBridge.shared.isExecuting) { _, executing in
+            if executing {
+                AgentExecutionState.shared.begin(label: EngineBridge.shared.lastActionDescription, tier: 1)
+            } else if !aiService.isExecutingTools {
+                AgentExecutionState.shared.end()
+            }
+        }
+        .onAppear {
+            isTextFieldFocused = true
+
+            if configService.activeProviderType == .ollama {
+                Task { await configService.fetchOllamaModels() }
+            }
+        }
+        .onChange(of: configService.config.activeProviderId) { _, _ in
+            if configService.activeProviderType == .ollama {
+                Task { await configService.fetchOllamaModels() }
+            }
+        }
     }
 
     // MARK: - Header
@@ -171,32 +175,29 @@ struct SidebarAIChat: View {
             .buttonStyle(NavButtonStyle())
             .foregroundStyle(Color.primary)
 
-            Picker("Mode", selection: $sidebarMode) {
-                ForEach(SidebarMode.allCases) { mode in
-                    Text(mode.rawValue).tag(mode)
-                }
+            if !aiService.messages.isEmpty {
+                Text("Ask Nook")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(contrastText.opacity(0.9))
+                    .transition(.blur.animation(.smooth))
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
 
             Spacer()
 
-            if sidebarMode == .assistant {
-                Button("Settings", systemImage: "gearshape") {
-                    showSettingsDialog()
-                }
-                .labelStyle(.iconOnly)
-                .buttonStyle(NavButtonStyle())
-                .foregroundStyle(Color.primary)
-
-                Button("Clear Messages", systemImage: "trash") {
-                    showClearMessagesDialog()
-                }
-                .labelStyle(.iconOnly)
-                .buttonStyle(NavButtonStyle())
-                .foregroundStyle(Color.primary)
-                .disabled(aiService.messages.isEmpty)
+            Button("Settings", systemImage: "gearshape") {
+                showSettingsDialog()
             }
+            .labelStyle(.iconOnly)
+            .buttonStyle(NavButtonStyle())
+            .foregroundStyle(Color.primary)
+
+            Button("Clear Messages", systemImage: "trash") {
+                showClearMessagesDialog()
+            }
+            .labelStyle(.iconOnly)
+            .buttonStyle(NavButtonStyle())
+            .foregroundStyle(Color.primary)
+            .disabled(aiService.messages.isEmpty)
         }
         .padding(.horizontal, 8)
     }
@@ -205,7 +206,7 @@ struct SidebarAIChat: View {
 
     private var inputAreaView: some View {
         VStack(spacing: 8) {
-            TextField("Ask anything...", text: $messageText, axis: .vertical)
+            TextField("Ask about this page...", text: $messageText, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(.system(size: 13, weight: .medium))
                 .foregroundColor(contrastText.opacity(0.9))
@@ -231,13 +232,7 @@ struct SidebarAIChat: View {
                         .foregroundStyle(messageText.isEmpty ? contrastText.opacity(0.3) : contrastText.opacity(0.9))
                 }
                 .buttonStyle(.plain)
-                .disabled(
-                    messageText.isEmpty
-                        || aiService.isLoading
-                        || (!aiService.hasApiKey
-                            && WorkflowManager.shared.parseChatCommand(messageText) == .notHandled
-                            && !WorkflowSlashCommandExecutor.isSlashCommand(messageText))
-                )
+                .disabled(messageText.isEmpty || aiService.isLoading || !aiService.hasApiKey)
             }
         }
         .padding(.horizontal, 12)
@@ -380,19 +375,47 @@ struct SidebarAIChat: View {
     }
 
     private var emptyStateView: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "sparkle")
-                .font(.system(size: 28))
-                .foregroundStyle(contrastText.opacity(0.25))
+        VStack(spacing: 12) {
+            let webSearchEnabled = configService.generationConfig.webSearchEnabled
+            let supportsWebSearch = configService.activeProviderType == .openRouter || configService.activeProviderType == .gemini
 
-            Text("Ask about this page or anything else.")
-                .font(.system(size: 12))
-                .foregroundStyle(contrastText.opacity(0.55))
-                .multilineTextAlignment(.center)
+            Image(systemName: webSearchEnabled && supportsWebSearch ? "globe" : "sparkle")
+                .font(.system(size: 32))
+                .foregroundStyle(webSearchEnabled && supportsWebSearch ? .green.opacity(0.6) : contrastText.opacity(0.3))
+
+            Text("Ask Nook")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(contrastText.opacity(0.8))
+
+            if webSearchEnabled && supportsWebSearch {
+                VStack(spacing: 6) {
+                    Text("Questions about this page, or just curious? I'm here.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(contrastText.opacity(0.6))
+                        .multilineTextAlignment(.center)
+
+                    HStack(spacing: 4) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.green.opacity(0.7))
+                        Text("Web search enabled")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.green.opacity(0.7))
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(.green.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                }
+            } else {
+                Text("Questions about this page, or just curious? I'm here.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(contrastText.opacity(0.6))
+                    .multilineTextAlignment(.center)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.horizontal, 20)
-        .padding(.top, 48)
+        .padding(.top, 60)
     }
 
     private var loadingView: some View {
@@ -427,44 +450,17 @@ struct SidebarAIChat: View {
         let text = messageText
         messageText = ""
 
-        if WorkflowSlashCommandExecutor.execute(text, browserManager: browserManager) {
+        if WorkflowManager.shared.handleChatCommand(text, browserManager: browserManager, windowState: windowState) {
+            if case .compile(let name) = WorkflowManager.shared.parseChatCommand(text), !name.isEmpty {
+                pendingSaveName = nil
+            }
             return
         }
 
-        switch WorkflowManager.shared.parseChatCommand(text) {
-        case .notHandled:
-            guard aiService.hasApiKey else { return }
-            Task {
-                await aiService.sendMessage(text, windowState: windowState)
-            }
-        case .handledLocally:
-            break
-        case .compile(let name):
-            if !name.isEmpty {
-                WorkflowManager.shared.handleChatCommand(text, browserManager: browserManager)
-            }
-        case .run(let workflowId, let workflowName):
-            WorkflowManager.shared.compileMessage = "Running \(workflowName)..."
-            runWorkflow(workflowId)
+        guard aiService.hasApiKey else { return }
+        Task {
+            await aiService.sendMessage(text, windowState: windowState)
         }
-    }
-
-    private func runWorkflow(_ id: String) {
-        guard let tab = browserManager.currentTabForActiveWindow(),
-              let windowId = browserManager.windowRegistry?.activeWindow?.id,
-              let webView = browserManager.getWebView(for: tab.id, in: windowId)
-        else {
-            WorkflowManager.shared.lastError = "No active tab for workflow"
-            return
-        }
-        tab.isOpenHiveNewTab = false
-        WorkflowManager.shared.execute(
-            workflowId: id,
-            webView: webView,
-            tabId: tab.id,
-            windowId: windowId,
-            browserManager: browserManager
-        )
     }
 
     private func showSettingsDialog() {

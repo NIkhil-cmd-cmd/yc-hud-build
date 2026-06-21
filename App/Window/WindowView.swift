@@ -20,7 +20,6 @@ struct WindowView: View {
     @Environment(\.nookSettings) var nookSettings
     @StateObject private var hoverSidebarManager = HoverSidebarManager()
     @Environment(\.colorScheme) var colorScheme
-    @State private var showTokensPanel = false
     
     var body: some View {
         ZStack {
@@ -151,13 +150,6 @@ struct WindowView: View {
                     )
                 }
             }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .openHiveShowTokens)) { _ in
-            showTokensPanel = true
-        }
-        .sheet(isPresented: $showTokensPanel) {
-            TokensPanelView()
-                .frame(minWidth: 360, minHeight: 420)
         }
         .environmentObject(browserManager)
         .environmentObject(browserManager.gradientColorManager)
@@ -387,7 +379,7 @@ struct WindowView: View {
             }
         }
         .overlay {
-            if aiService.isExecutingTools, windowState.isSidebarAIChatVisible {
+            if aiService.isExecutingTools {
                 ToolExecutionGlowView()
                     .transition(.opacity.animation(.easeInOut(duration: 0.3)))
                     .allowsHitTesting(false)

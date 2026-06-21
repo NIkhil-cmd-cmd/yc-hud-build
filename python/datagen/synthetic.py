@@ -24,6 +24,6 @@ def generate_configs(limit: int = 15) -> list[dict]:
 
 
 if __name__ == "__main__":
-    out = Path(__file__).resolve().parents[1] / "configs" / "collection_configs.json"
+    out = Path(__file__).resolve().parents[2] / "configs" / "collection_configs.json"
     out.write_text(json.dumps(generate_configs(), indent=2))
     print(f"wrote {len(generate_configs())} configs to {out}")

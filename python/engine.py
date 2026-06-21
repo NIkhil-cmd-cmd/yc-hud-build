@@ -17,7 +17,7 @@ from hud_grade import grade_execution
 from log_config import log_event, setup_logging
 from observer import Observer
 from playwright_runner import PlaywrightRunner
-from train import compile_workflow_from_buffer
+from train import build_policy_json, compile_workflow_from_buffer, write_policy_artifact
 
 log = setup_logging("openhive.engine")
 
@@ -114,7 +114,7 @@ async def _finish_execution(
 
 
 def _use_playwright() -> bool:
-    return os.environ.get("OPENHIVE_USE_PLAYWRIGHT", "0") == "1"
+    return os.environ.get("OPENHIVE_USE_PLAYWRIGHT", "1") == "1"
 
 
 async def _cancel_playwright_execution(conn_id: int) -> None:
@@ -390,6 +390,8 @@ async def handle(ws: websockets.WebSocketServerProtocol) -> None:
                     workflow = compile_workflow_from_buffer(name, observer.buffer)
                     wid = workflow["id"]
                     (WORKFLOW_DIR / f"{wid}.json").write_text(json.dumps(workflow, indent=2))
+                    policy = build_policy_json([{"harvest": observer.buffer, "success": True}])
+                    write_policy_artifact(WORKFLOW_DIR / f"{wid}_policy.json", policy)
                     log_event(log, "workflow_saved", workflow_id=wid, name=name, steps=buf_len)
                     await _send(
                         ws,
@@ -451,6 +453,55 @@ async def handle(ws: websockets.WebSocketServerProtocol) -> None:
                             {
                                 "type": "exa_search_result",
                                 "requestId": request_id,
+                                "error": str(exc),
+                            },
+                        )
+
+                case "agent_action":
+                    from agent_browser import agent_playwright_enabled, perform_action
+
+                    request_id = msg.get("requestId", "")
+                    if not agent_playwright_enabled():
+                        await _send(
+                            ws,
+                            {
+                                "type": "agent_action_result",
+                                "requestId": request_id,
+                                "ok": False,
+                                "error": "Playwright agent disabled",
+                            },
+                        )
+                        continue
+                    action = msg.get("action") or {}
+                    page_url = msg.get("url") or ""
+                    log_event(
+                        log,
+                        "agent_action",
+                        request_id=request_id,
+                        action_type=action.get("type"),
+                        url=page_url[:80],
+                    )
+                    try:
+                        result = await perform_action(action, url=page_url or None)
+                        await _send(
+                            ws,
+                            {
+                                "type": "agent_action_result",
+                                "requestId": request_id,
+                                "ok": result["ok"],
+                                "detail": result["detail"],
+                                "url": result.get("url", ""),
+                                "title": result.get("title", ""),
+                            },
+                        )
+                    except Exception as exc:
+                        log_event(log, "agent_action_error", request_id=request_id, error=str(exc))
+                        await _send(
+                            ws,
+                            {
+                                "type": "agent_action_result",
+                                "requestId": request_id,
+                                "ok": False,
                                 "error": str(exc),
                             },
                         )

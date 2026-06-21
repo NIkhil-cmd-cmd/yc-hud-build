@@ -1,4 +1,4 @@
-"""Policy executor — Tier 1 sequential replay (no post-replay policy loop)."""
+"""Policy executor — Tier 1/2/3 replay with embedding + geometry matching."""
 
 from __future__ import annotations
 
@@ -6,11 +6,14 @@ import json
 import os
 from typing import Any
 
-from embeddings import cosine, embed_state
+from embeddings import cosine, embed_element, embed_state
 from exa_client import get_page_schema
+from providers import expert_action, fast_action
 
 STATE_THRESHOLD = 0.82
+ELEMENT_THRESHOLD = 0.78
 MAX_STEPS = 25
+BBOX_PROXIMITY_PX = 80.0
 
 
 def dedupe_actions(actions: list[dict]) -> list[dict]:
@@ -143,7 +146,20 @@ class PolicyExecutor:
     def __init__(self, workflow: dict[str, Any], params: dict[str, str] | None = None):
         self.workflow = workflow
         self.policy = workflow.get("policy", {})
-        self.nodes = workflow.get("nodes", {})
+        if not isinstance(self.policy, dict):
+            self.policy = {}
+        raw_nodes = workflow.get("nodes", {})
+        if isinstance(raw_nodes, dict):
+            self.nodes = raw_nodes
+        elif isinstance(raw_nodes, list):
+            self.nodes = {
+                str(i): n for i, n in enumerate(raw_nodes) if isinstance(n, dict)
+            }
+        else:
+            self.nodes = {}
+        self.policy_nodes = workflow.get("policyNodes") or workflow.get("policy_nodes") or []
+        if not isinstance(self.policy_nodes, list):
+            self.policy_nodes = []
         raw_actions = workflow.get("actions") or _actions_from_policy(workflow)
         self.ordered_actions: list[dict] = normalize_actions_for_replay(raw_actions)
         self.params = params or {}
@@ -153,6 +169,7 @@ class PolicyExecutor:
         self.replay_index = 0
         self.current_node: str | None = None
         self.replay_only = bool(self.ordered_actions)
+        self._policy_loop = not bool(self.ordered_actions)
 
     async def next_action(
         self,
@@ -182,14 +199,22 @@ class PolicyExecutor:
                 "total": len(self.ordered_actions),
             }
 
-        if self.replay_only:
+        if self.replay_only and not self._policy_loop:
             return {"done": True, "tier": 0, "tokens": self.tokens, "reason": "replay_complete"}
 
-        # Legacy workflows without recorded actions — one-shot policy match (no loop)
         if self.step_index >= MAX_STEPS:
             return {"done": True, "tier": 0, "tokens": self.tokens, "reason": "max_steps"}
 
         state_emb = await embed_state(url, title, accessibility_tree)
+        candidates = _extract_candidates(accessibility_tree)
+
+        # T1 — policy node match (embedding + element geometry)
+        t1 = await self._tier1_policy_action(state_emb, url, candidates)
+        if t1:
+            self.tier_log.append(1)
+            self.step_index += 1
+            return {**t1, "done": False, "tier": 1, "tokens": self.tokens, "mode": "policy_node"}
+
         best_nid, best_sim = None, -1.0
         for nid, node in self.nodes.items():
             emb = node.get("emb") or node.get("state_emb")
@@ -205,7 +230,6 @@ class PolicyExecutor:
             if action.get("type"):
                 self.tier_log.append(1)
                 self.step_index += 1
-                self.replay_only = True  # never match policy twice
                 return {
                     "done": False,
                     "tier": 1,
@@ -215,33 +239,81 @@ class PolicyExecutor:
                     "mode": "policy_match",
                 }
 
-        tier2 = await self._fireworks_action(url, title, accessibility_tree)
+        tier2 = await self._tier2_action(url, title, candidates)
         if tier2:
             self.tokens += tier2.get("tokens_used", 200)
             self.tier_log.append(2)
             self.step_index += 1
-            self.replay_only = True
             return {
                 "done": False,
                 "tier": 2,
                 "tokens": self.tokens,
                 "action": tier2["action"],
+                "mode": "exa_fast",
             }
 
-        tier3 = await self._minimax_action(url, title, accessibility_tree)
+        tier3 = await self._tier3_expert(url, title, candidates)
         if tier3:
             self.tokens += tier3.get("tokens_used", 800)
             self.tier_log.append(3)
             self.step_index += 1
-            self.replay_only = True
             return {
                 "done": False,
                 "tier": 3,
                 "tokens": self.tokens,
                 "action": tier3["action"],
+                "mode": "expert",
             }
 
         return {"done": True, "tier": 0, "tokens": self.tokens, "reason": "no_action"}
+
+    async def _tier1_policy_action(
+        self, state_emb: list[float], url: str, candidates: list[dict]
+    ) -> dict[str, Any] | None:
+        if not self.policy_nodes:
+            return None
+        best_node = None
+        best_sim = -1.0
+        for node in self.policy_nodes:
+            centroid = node.get("centroid") or []
+            if not centroid:
+                continue
+            pattern = node.get("urlPattern") or ""
+            if pattern and pattern not in _url_pattern(url):
+                continue
+            sim = cosine(state_emb, centroid)
+            if sim > best_sim:
+                best_sim, best_node = sim, node
+        if not best_node or best_sim < STATE_THRESHOLD:
+            return None
+        actions = best_node.get("actions") or []
+        if not actions:
+            return None
+        best_action = actions[0]
+        matched = await _match_element(best_action, candidates)
+        if matched:
+            return {"action": matched, "sim": round(best_sim, 3)}
+        return None
+
+    async def _tier2_action(self, url: str, title: str, candidates: list[dict]) -> dict | None:
+        schema = await get_page_schema(url)
+        action, usage = await fast_action(url, title, candidates, schema)
+        if not action:
+            return None
+        replay = _action_from_ref(action, candidates)
+        if replay:
+            return {"action": replay, "tokens_used": usage}
+        return None
+
+    async def _tier3_expert(self, url: str, title: str, candidates: list[dict]) -> dict | None:
+        task = self.params or {"goal": self.workflow.get("name", "complete task")}
+        action, _raw, _provider = await expert_action(task, url, title, candidates)
+        if not action:
+            return None
+        replay = _action_from_ref(action, candidates)
+        if replay:
+            return {"action": replay, "tokens_used": 800}
+        return None
 
     @staticmethod
     def _same_page(target: str, current: str) -> bool:
@@ -263,60 +335,77 @@ class PolicyExecutor:
                 out[field] = val
         return out
 
-    async def _fireworks_action(self, url: str, title: str, tree: Any) -> dict | None:
-        api_key = os.environ.get("FIREWORKS_API_KEY")
-        if not api_key:
-            return None
 
-        from openai import AsyncOpenAI
+def _url_pattern(url: str) -> str:
+    from urllib.parse import urlparse
 
-        client = AsyncOpenAI(base_url="https://api.fireworks.ai/inference/v1", api_key=api_key)
-        schema = await get_page_schema(url)
-        prompt = (
-            f"URL: {url}\nTitle: {title}\nSchema: {schema[:500]}\n"
-            f"Elements: {json.dumps(tree, default=str)[:1500]}\n"
-            'Return JSON only: {"type":"click","text":"Search"} or {"type":"type","name":"q","value":"text"}'
-        )
-        try:
-            r = await client.chat.completions.create(
-                model="accounts/fireworks/models/llama-v3p1-8b-instruct",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0,
-                max_tokens=80,
-            )
-            text = r.choices[0].message.content or "{}"
-            usage = r.usage.total_tokens if r.usage else 200
-            action = json.loads(text.strip().strip("`").replace("json", ""))
-            return {"action": action, "tokens_used": usage}
-        except Exception:
-            return None
+    p = urlparse(url)
+    return f"{p.netloc}{p.path.rstrip('/')}"
 
-    async def _minimax_action(self, url: str, title: str, tree: Any) -> dict | None:
-        api_key = os.environ.get("MINIMAX_API_KEY")
-        if not api_key:
-            return None
 
-        from openai import AsyncOpenAI
+def _extract_candidates(tree: Any) -> list[dict]:
+    if isinstance(tree, dict):
+        elements = tree.get("elements") or tree.get("candidates") or []
+        if elements:
+            return [dict(e) for e in elements]
+    if isinstance(tree, list):
+        return [dict(e) for e in tree]
+    return []
 
-        client = AsyncOpenAI(
-            base_url="https://api.minimaxi.chat/v1",
-            api_key=api_key,
-        )
-        prompt = (
-            f"Browser task step. URL: {url}\nTitle: {title}\n"
-            f"Elements: {json.dumps(tree, default=str)[:2000]}\n"
-            'Next action JSON: {"type":"click","text":"Submit"}'
-        )
-        try:
-            r = await client.chat.completions.create(
-                model="MiniMax-Text-01",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0,
-                max_tokens=120,
-            )
-            text = r.choices[0].message.content or "{}"
-            usage = r.usage.total_tokens if r.usage else 800
-            action = json.loads(text.strip().strip("`").replace("json", ""))
-            return {"action": action, "tokens_used": usage}
-        except Exception:
-            return None
+
+def _action_from_ref(action: dict, candidates: list[dict]) -> dict | None:
+    atype = action.get("type") or action.get("action")
+    if not atype:
+        return None
+    ref = action.get("ref", "")
+    selected = next((c for c in candidates if c.get("ref") == ref), None)
+    out: dict[str, Any] = {"type": atype}
+    if atype == "type":
+        out["value"] = action.get("value", "")
+    if selected:
+        out["text"] = selected.get("text") or selected.get("label") or ""
+        out["selector"] = selected.get("selector") or ""
+        out["name"] = selected.get("name") or ""
+        out["ref"] = ref
+    elif action.get("text"):
+        out["text"] = action["text"]
+    elif action.get("selector"):
+        out["selector"] = action["selector"]
+    return out
+
+
+async def _match_element(stored: dict, candidates: list[dict]) -> dict | None:
+    ref = stored.get("ref", "")
+    el_centroid = stored.get("elementCentroid") or []
+    stored_text = (stored.get("value") or stored.get("text") or "").lower()
+
+    best: dict | None = None
+    best_score = -1.0
+    for c in candidates:
+        score = 0.0
+        if ref and c.get("ref") == ref:
+            score += 2.0
+        if stored_text and stored_text in (c.get("text") or "").lower():
+            score += 1.0
+        if el_centroid:
+            cand_emb = await embed_element(c.get("text") or "", c.get("role") or "", c.get("ref") or "")
+            score += cosine(el_centroid, cand_emb)
+        if score > best_score:
+            best_score, best = score, c
+
+    if not best:
+        best = next((c for c in candidates if c.get("ref") == ref), None)
+    if not best:
+        return None
+
+    atype = stored.get("type", "click")
+    out: dict[str, Any] = {
+        "type": atype,
+        "text": best.get("text") or best.get("label") or "",
+        "selector": best.get("selector") or "",
+        "name": best.get("name") or "",
+        "ref": best.get("ref") or ref,
+    }
+    if atype in ("type", "fill"):
+        out["value"] = stored.get("value", "")
+    return out

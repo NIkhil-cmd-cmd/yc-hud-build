@@ -951,7 +951,7 @@ class BrowserManager: ObservableObject {
             ?? windowState.currentProfileId.flatMap { pid in
                 tabManager.spaces.first(where: { $0.profileId == pid })
             }
-        let newTab = tabManager.createNewTab(url: url, in: targetSpace, openHiveNewTab: url == "about:blank")
+        let newTab = tabManager.createNewTab(url: url, in: targetSpace)
         selectTab(newTab, in: windowState)
     }
 

@@ -35,13 +35,30 @@ enum BrowserTools {
 
     static let clickElement = AIToolDefinition(
         name: "clickElement",
-        description: "Click an element on the page. Provide EITHER a CSS selector OR the visible text of the element to click. When using text, it finds buttons, links, and inputs whose visible text contains your query.",
+        description: "Click an element on the page using real browser automation (Playwright). Provide EITHER a CSS selector OR the visible text of the element to click. When using text, it finds buttons, links, and inputs whose visible text contains your query.",
         parameters: [
             "type": "object",
             "properties": [
                 "selector": ["type": "string", "description": "CSS selector for the element to click"],
-                "text": ["type": "string", "description": "Visible text of the element to click (searches buttons, links, inputs, [role=button])"]
+                "text": ["type": "string", "description": "Visible text of the element to click (searches buttons, links, inputs, [role=button])"],
+                "name": ["type": "string", "description": "Element name, aria-label, or placeholder hint"]
             ]
+        ]
+    )
+
+    static let typeIntoElement = AIToolDefinition(
+        name: "typeIntoElement",
+        description: "Type text into an input, textarea, or search box using real keyboard input (Playwright). Use getInteractiveElements first to find the field. Set submit=true to press Enter after typing (useful for search boxes).",
+        parameters: [
+            "type": "object",
+            "properties": [
+                "value": ["type": "string", "description": "Text to type into the field"],
+                "selector": ["type": "string", "description": "CSS selector for the input field"],
+                "text": ["type": "string", "description": "Label/placeholder text to find the field by"],
+                "name": ["type": "string", "description": "Input name attribute"],
+                "submit": ["type": "boolean", "description": "Press Enter after typing (default: false, auto true for search fields)"]
+            ],
+            "required": ["value"]
         ]
     )
 
@@ -153,7 +170,7 @@ enum BrowserTools {
     )
 
     static let allTools: [AIToolDefinition] = [
-        navigateToURL, readPageContent, clickElement,
+        navigateToURL, readPageContent, clickElement, typeIntoElement,
         getInteractiveElements,
         extractStructuredData, summarizePage, searchInPage,
         getTabList, switchTab, createTab, getSelectedText,

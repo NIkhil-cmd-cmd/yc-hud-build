@@ -71,7 +71,7 @@ final class WorkflowManager {
         return .notHandled
     }
 
-    func handleChatCommand(_ text: String, browserManager: BrowserManager? = nil) -> Bool {
+    func handleChatCommand(_ text: String, browserManager: BrowserManager? = nil, windowState: BrowserWindowState? = nil) -> Bool {
         if WorkflowSlashCommand.parse(text).isHandled {
             guard let browserManager else { return true }
             return WorkflowSlashCommandExecutor.execute(text, browserManager: browserManager)
@@ -87,7 +87,18 @@ final class WorkflowManager {
             EngineBridge.shared.compileWorkflow(name: name)
             compileMessage = "Compiling \(name)..."
             return true
-        case .run:
+        case .run(let workflowId, let workflowName):
+            guard let browserManager, let windowState,
+                  let tab = browserManager.currentTab(for: windowState),
+                  let webView = tab.assignedWebView else { return true }
+            execute(
+                workflowId: workflowId,
+                webView: webView,
+                tabId: tab.id,
+                windowId: windowState.id,
+                browserManager: browserManager
+            )
+            compileMessage = "Running \(workflowName)…"
             return true
         }
     }

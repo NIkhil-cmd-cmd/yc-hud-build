@@ -457,9 +457,7 @@ class KeyboardShortcutManager {
 
             // Tab Management
             case .newTab:
-                if let windowState = self.windowRegistry?.activeWindow {
-                    browserManager.createNewTab(in: windowState, url: "about:blank")
-                }
+                self.windowRegistry?.activeWindow?.commandPalette?.open()
             case .closeTab:
                 browserManager.closeCurrentTab()
             case .undoCloseTab:
@@ -542,10 +540,7 @@ class KeyboardShortcutManager {
                 NotificationCenter.default.post(name: .organizeTabsRequested, object: nil)
             case .saveWorkflow:
                 WorkflowManager.shared.saveCurrentSession(name: "Saved workflow")
-            case .showTokensPanel:
-                NotificationCenter.default.post(name: .openHiveShowTokens, object: nil)
             }
-
         }
     }
 
@@ -577,5 +572,4 @@ class KeyboardShortcutManager {
 // MARK: - Notification
 extension Notification.Name {
     static let organizeTabsRequested = Notification.Name("organizeTabsRequested")
-    static let openHiveShowTokens = Notification.Name("openHiveShowTokens")
 }

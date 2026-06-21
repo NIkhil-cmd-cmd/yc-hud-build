@@ -10,6 +10,9 @@ fi
 source .venv/bin/activate
 pip install -q -r python/requirements.txt 2>/dev/null || pip install -q websockets openai networkx pydantic exa-py "hud-python>=0.6.6" playwright
 python -m playwright install chromium 2>/dev/null || playwright install chromium
+export OPENHIVE_USE_PLAYWRIGHT="${OPENHIVE_USE_PLAYWRIGHT:-1}"
+export OPENHIVE_AGENT_PLAYWRIGHT="${OPENHIVE_AGENT_PLAYWRIGHT:-1}"
+export OPENHIVE_HEADLESS="${OPENHIVE_HEADLESS:-0}"
 if [[ -f .env ]]; then set -a; source .env; set +a; fi
 PORT="${OPENHIVE_ENGINE_PORT:-8765}"
 # Reclaim port if a stale engine is still running

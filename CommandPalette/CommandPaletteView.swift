@@ -422,15 +422,6 @@ struct CommandPaletteView: View {
     }
 
     private func handleReturn() {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if WorkflowSlashCommandExecutor.execute(trimmed, browserManager: browserManager) {
-            text = ""
-            activeSiteSearch = nil
-            selectedSuggestionIndex = -1
-            commandPalette.close()
-            return
-        }
-
         if let site = activeSiteSearch {
             let query: String
             if selectedSuggestionIndex >= 0 && selectedSuggestionIndex < visibleSuggestions.count {
