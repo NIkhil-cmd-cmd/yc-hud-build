@@ -50,7 +50,7 @@ class AgentTaskSession(TrajectorySession):
                         "mode": "agent",
                     }
                 )
-                await asyncio.sleep(2)
+                await asyncio.sleep(0.8)
                 state = await self._wait_state()
             else:
                 try:
@@ -128,7 +128,7 @@ class AgentTaskSession(TrajectorySession):
                     }
                 )
 
-                await asyncio.sleep(1.0 if swift_action.get("type") == "navigate" else 0.8)
+                await asyncio.sleep(0.4 if swift_action.get("type") == "navigate" else 0.2)
                 state = await self._wait_state(timeout=30)
                 if state.get("lastActionOk") is not False:
                     history.append(

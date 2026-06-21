@@ -27,8 +27,16 @@ final class AgentNotchWindow: NSPanel {
         hasShadow = false
     }
 
-    override var canBecomeKey: Bool { false }
+    // Allow the panel to become key so its controls (mic button, stop) are clickable.
+    // It's a non-activating panel, so this won't pull focus away from the browser app.
+    override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+}
+
+/// Hosting view that responds to the very first click even when Nook isn't frontmost,
+/// so the notch feels "clicky" no matter which app is active.
+final class FirstMouseHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
 @MainActor
@@ -86,7 +94,7 @@ final class AgentNotchPanelController {
 
     private func createPanel() {
         let content = AgentNotchView(vm: viewModel)
-        let hosting = NSHostingView(rootView: content)
+        let hosting = FirstMouseHostingView(rootView: content)
         let rect = NSRect(origin: NotchSizing.windowOrigin(), size: NotchSizing.windowSize)
         let styleMask: NSWindow.StyleMask = [.borderless, .nonactivatingPanel, .utilityWindow, .hudWindow]
         let p = AgentNotchWindow(contentRect: rect, styleMask: styleMask, backing: .buffered, defer: false)

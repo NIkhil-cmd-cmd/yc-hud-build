@@ -855,6 +855,64 @@ async def _dispatch_message(
                     _trajectory_sessions.pop(conn_id, None)
                     await _send(ws, {"type": "execute_cancelled"})
 
+                case "start_ultraplan":
+                    from ultraplan import UltraPlanSession, run_ultraplan
+
+                    _executors.pop(conn_id, None)
+                    _exec_meta.pop(conn_id, None)
+                    goal = (msg.get("goal") or "").strip()
+                    if not goal and isinstance(msg.get("task"), dict):
+                        goal = str(msg["task"].get("goal") or "").strip()
+                    if not goal:
+                        await _send(ws, {"type": "error", "message": "Ultraplan requires a goal string"})
+                        return session_id
+                    existing = _trajectory_tasks.get(conn_id)
+                    if existing and not existing.done():
+                        await _send(ws, {"type": "error", "message": "Cancel the running agent first"})
+                        return session_id
+
+                    up_workflows = []
+                    for p in sorted(WORKFLOW_DIR.glob("*.json")):
+                        if p.name.endswith("_policy.json"):
+                            continue
+                        try:
+                            up_workflows.append(json.loads(p.read_text()))
+                        except Exception:
+                            log_event(log, "workflow_load_failed", path=str(p))
+
+                    send_fn = lambda payload: _send(ws, payload)
+                    ctx = msg.get("storageState") if isinstance(msg.get("storageState"), dict) else None
+                    up_session = UltraPlanSession(send_fn)
+                    up_session._running = True
+                    _trajectory_sessions[conn_id] = up_session
+
+                    async def _run_ultraplan() -> None:
+                        try:
+                            await run_ultraplan(
+                                send_fn,
+                                goal,
+                                workflows=up_workflows,
+                                storage_state=ctx,
+                                page_url=msg.get("pageUrl") or msg.get("startUrl"),
+                                page_title=msg.get("pageTitle"),
+                                max_subtasks=int(msg.get("maxSubtasks") or 8),
+                                max_steps_per_subtask=int(msg.get("maxStepsPerSubtask") or 40),
+                                safety=msg.get("safety") if isinstance(msg.get("safety"), dict) else None,
+                                session=up_session,
+                            )
+                        except asyncio.CancelledError:
+                            await _send(ws, {"type": "execute_cancelled"})
+                            raise
+                        except Exception as exc:
+                            log.error("ultraplan_failed\n%s", traceback.format_exc())
+                            await _send(ws, {"type": "error", "message": f"Ultraplan: {str(exc)[:200]}"})
+                            await _send(ws, {"type": "execute_done", "hudStatus": "error"})
+                        finally:
+                            _trajectory_sessions.pop(conn_id, None)
+                            _trajectory_tasks.pop(conn_id, None)
+
+                    _trajectory_tasks[conn_id] = asyncio.create_task(_run_ultraplan())
+
                 case "start_trajectory":
                     from browser_use_runner import browser_use_enabled, run_flight_trajectory
                     from trajectory_runner import TrajectorySession
@@ -901,6 +959,13 @@ async def _dispatch_message(
                     await _schedule_agent_task(ws, conn_id, msg)
 
                 case "cancel_trajectory":
+                    traj_task = _trajectory_tasks.pop(conn_id, None)
+                    if traj_task and not traj_task.done():
+                        traj_task.cancel()
+                    _trajectory_sessions.pop(conn_id, None)
+                    await _send(ws, {"type": "execute_cancelled"})
+
+                case "cancel_ultraplan":
                     traj_task = _trajectory_tasks.pop(conn_id, None)
                     if traj_task and not traj_task.done():
                         traj_task.cancel()
@@ -1116,6 +1181,7 @@ async def _dispatch_message(
                                 "category": category,
                                 "tags": data.get("tags") or [],
                                 "seeded": bool(data.get("seeded")),
+                                "metadata": data.get("metadata", {}),
                             }
                         )
                     log_event(log, "list_workflows", count=len(workflows))

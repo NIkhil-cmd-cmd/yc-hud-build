@@ -7,9 +7,14 @@ import time
 from typing import Any, Awaitable, Callable
 
 from agent_llm import choose_next_action
+from mdp_guided import needs_verification, verify_recommendation
 from smoke.run_local_browser_trace_gate import reached_results, scripted_action
 
 SendFn = Callable[[dict[str, Any]], Awaitable[None]]
+
+# How many times a single step may "wait + re-snapshot" before we give up and
+# fire the recommended action anyway. Bounds the verifier's patience per step.
+MAX_VERIFY_WAITS = 4
 
 
 def candidate_center(candidate: dict[str, Any]) -> tuple[float, float] | None:
@@ -155,6 +160,7 @@ class TrajectorySession:
             "url": msg.get("url", ""),
             "title": msg.get("title", ""),
             "text": msg.get("pageText", ""),
+            "accessibilityTree": tree,
             "candidates": candidates,
             "lastActionOk": msg.get("lastActionOk"),
             "lastActionDetail": msg.get("lastActionDetail"),
@@ -215,13 +221,16 @@ class TrajectorySession:
     async def _step_delay(self, task: dict[str, str], swift_action: dict[str, Any]) -> None:
         kind = swift_action.get("type")
         if task.get("flightDemoReplay"):
-            await asyncio.sleep(1.0 if kind == "navigate" else 0.4)
+            # The verifier gate re-checks readiness, so we don't need to crawl —
+            # but give the SPA a beat to start rendering before we re-snapshot.
+            await asyncio.sleep(0.5 if kind == "navigate" else 0.28)
             return
         if task.get("flightDemoLearn"):
-            base = 2.5 if kind == "navigate" else 1.8
+            # Slightly slower so the learning demo is watchable, but not sluggish.
+            base = 1.0 if kind == "navigate" else 0.6
             await asyncio.sleep(base)
             return
-        await asyncio.sleep(1.0 if kind == "navigate" else 0.8)
+        await asyncio.sleep(0.4 if kind == "navigate" else 0.2)
 
     def _state_timeout(self, task: dict[str, str]) -> float:
         if task.get("flightDemoLearn"):
@@ -246,6 +255,75 @@ class TrajectorySession:
             raw = scripted_action(task, candidates, history)
             return raw, {"source": "scripted", "model": "scripted-google-flights-expert"}
         return await choose_next_action(task, summary, candidates, history, step)
+
+    async def _verify_step(
+        self,
+        task: dict[str, str],
+        raw: dict[str, Any],
+        summary: dict[str, Any],
+        candidates: list[dict[str, Any]],
+        history: list[dict[str, Any]],
+        step: int,
+        max_steps: int,
+        state_timeout: float,
+    ) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any], dict[str, Any] | None, bool]:
+        """MDP-guided gate: a cheap LLM confirms the live page is ready for the
+        recommended action before we fire it. On a "wait" verdict it re-snapshots
+        the page (no-op wait action) and asks again, so we stop spamming actions
+        into a page that hasn't finished rendering.
+
+        Returns (raw, candidates, summary, latest_state, reached_results).
+        """
+        latest_state: dict[str, Any] | None = None
+        for _ in range(MAX_VERIFY_WAITS + 1):
+            decision, vmeta = await verify_recommendation(
+                task, raw, summary, candidates, history, step
+            )
+            if decision.get("verdict") != "wait":
+                ref = decision.get("ref")
+                if ref:
+                    raw = dict(raw)
+                    raw["ref"] = ref
+                return raw, candidates, summary, latest_state, False
+
+            # Page not ready — let the UI show we're checking, then poll a fresh
+            # snapshot via a no-op wait action and re-evaluate the SAME step.
+            await self._send(
+                {
+                    "type": "agent_step",
+                    "step": step + 1,
+                    "provider": "verifier",
+                    "model": vmeta.get("model"),
+                    "action": "wait",
+                    "mode": "verify",
+                    "note": decision.get("reason") or "waiting for page",
+                }
+            )
+            await self._send(
+                {
+                    "type": "execute_action",
+                    "backend": "webkit",
+                    "action": {"type": "wait", "timeout": 700},
+                    "step": step + 1,
+                    "total": max_steps,
+                    "mode": "verify",
+                }
+            )
+            try:
+                latest_state = await self._wait_state(timeout=state_timeout)
+            except asyncio.TimeoutError:
+                return raw, candidates, summary, latest_state, False
+            candidates = latest_state.get("candidates") or []
+            summary = {
+                "url": latest_state.get("url", ""),
+                "title": latest_state.get("title", ""),
+                "text": latest_state.get("text", ""),
+            }
+            if step > 0 and reached_results(summary):
+                return raw, candidates, summary, latest_state, True
+
+        # Ran out of patience — fire the recommended action with what we have.
+        return raw, candidates, summary, latest_state, False
 
     async def run(self, task: dict[str, str], *, max_steps: int = 12) -> dict[str, Any]:
         from flight_demo import DEMO_SKILL_ID
@@ -284,12 +362,14 @@ class TrajectorySession:
                     "total": max_steps,
                 }
             )
+            # Swift already navigated + waited for the form in prepareFlightPage, so
+            # the first step is effectively a no-op navigate — don't re-wait seconds.
             if task.get("flightDemoReplay"):
-                await asyncio.sleep(2.0)
+                await asyncio.sleep(0.6)
             elif task.get("flightDemoLearn"):
-                await asyncio.sleep(4.0)
+                await asyncio.sleep(1.2)
             else:
-                await asyncio.sleep(4.0)
+                await asyncio.sleep(1.2)
             state = await self._wait_state(timeout=state_timeout)
 
             for step in range(max_steps):
@@ -324,6 +404,39 @@ class TrajectorySession:
 
                 raw, meta = await self._pick_action(task, summary, candidates, history, step)
                 kind = raw.get("action") or raw.get("type") or "click"
+
+                # MDP-guided verification: defer to the Markov recommendation but
+                # let a cheap LLM confirm the live page is ready (and fix the ref)
+                # instead of firing every step blindly.
+                if kind != "done" and needs_verification(kind, raw):
+                    raw, candidates, summary, verify_state, results_now = await self._verify_step(
+                        task, raw, summary, candidates, history, step, max_steps, state_timeout
+                    )
+                    kind = raw.get("action") or raw.get("type") or "click"
+                    if verify_state is not None:
+                        state = verify_state
+                    if results_now:
+                        elapsed = round(time.time() - t0, 1)
+                        await self._maybe_compile_flight_demo(task, history, True)
+                        await self._send(
+                            {
+                                "type": "trajectory_complete",
+                                "success": True,
+                                "steps": step,
+                                "finalUrl": summary.get("url", ""),
+                                "reason": "results_detected",
+                                "elapsedSec": elapsed,
+                                "flightDemoLearn": bool(task.get("flightDemoLearn")),
+                                "flightDemoReplay": bool(task.get("flightDemoReplay")),
+                            }
+                        )
+                        await self._send({"type": "execute_done", "hudStatus": "ok"})
+                        return {
+                            "success": True,
+                            "steps": step,
+                            "finalUrl": summary.get("url", ""),
+                            "elapsedSec": elapsed,
+                        }
 
                 await self._send(
                     {

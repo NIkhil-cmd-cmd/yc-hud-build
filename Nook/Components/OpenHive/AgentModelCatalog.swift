@@ -53,60 +53,51 @@ enum AgentModelBrand: String, Codable, CaseIterable {
         self == .llama
     }
 
-    /// Four-stop palette for new-tab ShaderGradient-style background (dark base + brand accent).
-    var shaderGradientColors: [Color] {
-        let base = Color(red: 0.035, green: 0.035, blue: 0.035)
+    /// ShaderGradient query URL — same renderer + grain settings as the Tera marketing site hero.
+    var shaderGradientURL: String {
         switch self {
         case .openai:
-            return [
-                base,
-                Color(red: 0.06, green: 0.10, blue: 0.09),
-                Color(red: 0.07, green: 0.64, blue: 0.50),
-                Color(red: 0.04, green: 0.28, blue: 0.24),
-            ]
+            return Self.gradientURL(color1: "#090909", color2: "#0c1814", color3: "#12a884")
         case .claude:
-            return [
-                base,
-                Color(red: 0.12, green: 0.09, blue: 0.07),
-                Color(red: 0.84, green: 0.47, blue: 0.34),
-                Color(red: 0.45, green: 0.22, blue: 0.14),
-            ]
+            return Self.gradientURL(color1: "#090909", color2: "#181210", color3: "#d67857")
         case .deepseek:
-            return [
-                base,
-                Color(red: 0.06, green: 0.09, blue: 0.16),
-                Color(red: 0.24, green: 0.52, blue: 0.96),
-                Color(red: 0.10, green: 0.22, blue: 0.48),
-            ]
+            return Self.gradientURL(color1: "#090909", color2: "#0e1420", color3: "#3d85f5")
         case .minimax:
-            return [
-                base,
-                Color(red: 0.10, green: 0.07, blue: 0.14),
-                Color(red: 0.55, green: 0.36, blue: 0.96),
-                Color(red: 0.28, green: 0.14, blue: 0.52),
-            ]
+            return Self.gradientURL(color1: "#090909", color2: "#120e1a", color3: "#8c5cf5")
         case .llama:
-            return [
-                base,
-                Color(red: 0.06, green: 0.11, blue: 0.16),
-                Color(red: 0.10, green: 0.55, blue: 0.82),
-                Color(red: 0.05, green: 0.26, blue: 0.42),
-            ]
+            return Self.gradientURL(color1: "#090909", color2: "#0e1820", color3: "#1a8cd1")
         case .exa:
-            return [
-                base,
-                Color(red: 0.08, green: 0.08, blue: 0.09),
-                Color(red: 0.42, green: 0.42, blue: 0.44),
-                Color(red: 0.18, green: 0.18, blue: 0.20),
-            ]
+            return Self.gradientURL(
+                color1: "#070707",
+                color2: "#111111",
+                color3: "#1a1a18",
+                grainBlending: 0.38,
+                uStrength: 1.6,
+                uSpeed: 0.10,
+                type: "plane"
+            )
         case .gemini:
-            return [
-                base,
-                Color(red: 0.07, green: 0.10, blue: 0.18),
-                Color(red: 0.26, green: 0.52, blue: 0.96),
-                Color(red: 0.12, green: 0.28, blue: 0.62),
-            ]
+            return Self.gradientURL(color1: "#090909", color2: "#0e1428", color3: "#4285f4")
         }
+    }
+
+    private static func gradientURL(
+        color1: String,
+        color2: String,
+        color3: String,
+        grainBlending: Double = 0.48,
+        uStrength: Double = 2.4,
+        uSpeed: Double = 0.18,
+        type: String = "waterPlane"
+    ) -> String {
+        let c1 = encodeColor(color1)
+        let c2 = encodeColor(color2)
+        let c3 = encodeColor(color3)
+        return "https://www.shadergradient.co/customize?animate=on&axesHelper=off&brightness=0.72&cAzimuthAngle=170&cDistance=5.4&cPolarAngle=88&cameraZoom=1&color1=\(c1)&color2=\(c2)&color3=\(c3)&embedMode=off&enableTransition=on&envPreset=city&grain=on&grainBlending=\(grainBlending)&lightType=3d&pixelDensity=1.5&positionY=0.1&reflection=0.18&rotation=0&shader=defaults&type=\(type)&uAmplitude=0&uDensity=1&uFrequency=4.2&uSpeed=\(uSpeed)&uStrength=\(uStrength)&wireframe=false"
+    }
+
+    private static func encodeColor(_ hex: String) -> String {
+        hex.replacingOccurrences(of: "#", with: "%23")
     }
 }
 

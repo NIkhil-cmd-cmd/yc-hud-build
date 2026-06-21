@@ -1,9 +1,12 @@
-import { ShaderBackground, TESTIMONIALS_GRADIENT } from "./components/ShaderBackground.jsx";
+import { ShaderBackground, HeroShaderBackground, TESTIMONIALS_GRADIENT } from "./components/ShaderBackground.jsx";
+import { ScrollProgress, BackToTop } from "./components/ScrollChrome.jsx";
 import { TeraWordmark } from "./components/TeraWordmark.jsx";
 import { LiquidGlass } from "./components/LiquidGlass.jsx";
 import { GrainCardArt } from "./components/GrainCardArt.jsx";
 import {
   useSiteEffects,
+  useScrollChrome,
+  useActiveSectionNav,
   useMockupCarousel,
   useTestimonialCarousel,
   useAccordions,
@@ -122,6 +125,8 @@ const STACK = ["Swift", "WebKit", "Python", "HUD", "Exa", "Fireworks", "MCP", "N
 
 export default function App() {
   useSiteEffects();
+  useScrollChrome();
+  useActiveSectionNav();
   useMockupCarousel();
   useTestimonialCarousel();
   useAccordions();
@@ -129,6 +134,8 @@ export default function App() {
 
   return (
     <>
+      <ScrollProgress />
+      <BackToTop />
       <header className="nav" role="banner">
         <LiquidGlass className="nav-glass" as="div" intensity={0.85} blur={26}>
           <div className="nav-inner">
@@ -138,8 +145,11 @@ export default function App() {
             <div className="nav-right">
               <span className="nav-badge">macOS 15.5+</span>
               <nav className="nav-links" aria-label="Primary">
-                <a href="#features">Features</a>
-                <a href="#pricing">Pricing</a>
+                <a href="#about" data-section="about">About</a>
+                <a href="#highlights" data-section="highlights">Highlights</a>
+                <a href="#features" data-section="features">Features</a>
+                <a href="#pricing" data-section="pricing">Pricing</a>
+                <a href="#faq" data-section="faq">FAQ</a>
                 <a href="/privacy.html">Privacy</a>
               </nav>
               <a href="#" className="btn btn-primary" data-download>
@@ -157,14 +167,25 @@ export default function App() {
 
       <nav className="nav-overlay" aria-label="Mobile menu" aria-hidden="true">
         <a href="#">Home</a>
+        <a href="#about">About</a>
+        <a href="#highlights">Highlights</a>
         <a href="#features">Features</a>
         <a href="#pricing">Pricing</a>
+        <a href="#faq">FAQ</a>
         <a href="/privacy.html">Privacy</a>
+      </nav>
+
+      <nav className="section-jump" aria-label="On-page sections">
+        <a href="#about" data-section="about">About</a>
+        <a href="#highlights" data-section="highlights">Highlights</a>
+        <a href="#features" data-section="features">Features</a>
+        <a href="#pricing" data-section="pricing">Pricing</a>
+        <a href="#faq" data-section="faq">FAQ</a>
       </nav>
 
       <main>
         <section className="hero" aria-labelledby="hero-heading">
-          <ShaderBackground className="hero-shader" pixelDensity={1.8} />
+          <HeroShaderBackground />
           <div className="container hero-content">
             <div className="hero-logo-wrap reveal hero-stagger">
               <TeraWordmark width={180} height={64} />
@@ -177,7 +198,18 @@ export default function App() {
             <p className="hero-sub reveal hero-stagger reveal-delay-2">
               Tera learns from how you browse, compiles your workflows on-device, and replays them without calling an LLM again.
             </p>
+            <div className="hero-actions reveal hero-stagger reveal-delay-3">
+              <a href="#" className="btn btn-primary" data-download>
+                Download for Mac
+              </a>
+              <a href="#about" className="btn btn-outline">
+                See how it works
+              </a>
+            </div>
           </div>
+          <a href="#about" className="hero-scroll-hint" aria-label="Scroll to About section">
+            <span className="hero-scroll-chevron" aria-hidden="true" />
+          </a>
         </section>
 
         <section className="section" id="about" aria-labelledby="about-heading">
@@ -461,9 +493,11 @@ export default function App() {
           <div className="footer-grid">
             <div className="footer-links">
               <h4>Explore</h4>
-              <a href="#">Home</a>
+              <a href="#about">About</a>
+              <a href="#highlights">Highlights</a>
               <a href="#features">Features</a>
               <a href="#pricing">Pricing</a>
+              <a href="#faq">FAQ</a>
               <a href="/privacy.html">Privacy</a>
             </div>
             <div className="footer-links">

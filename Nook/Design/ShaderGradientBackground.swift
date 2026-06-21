@@ -21,12 +21,8 @@ struct ShaderGradientBackground: View {
         ZStack {
             Color(red: 0.035, green: 0.035, blue: 0.035)
 
-            if shouldAnimate {
-                ShaderGradientWebView(gradientURL: brand.shaderGradientURL)
-            } else {
-                ShaderGradientWebView(gradientURL: brand.shaderGradientURL)
-                    .opacity(0.85)
-            }
+            ShaderGradientWebView(gradientURL: brand.shaderGradientURL)
+                .opacity(shouldAnimate ? 1 : 0.85)
         }
         .ignoresSafeArea()
         .animation(.easeInOut(duration: 2.4), value: brand)

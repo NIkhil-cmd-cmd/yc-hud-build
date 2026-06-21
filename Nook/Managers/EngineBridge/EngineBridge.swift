@@ -91,6 +91,7 @@ final class EngineBridge {
         var category: String
         var tags: [String]
         var seeded: Bool
+        var metadata: [String: [String]]?
 
         init(
             id: String,
@@ -98,7 +99,8 @@ final class EngineBridge {
             steps: Int,
             category: String = "other",
             tags: [String] = [],
-            seeded: Bool = false
+            seeded: Bool = false,
+            metadata: [String: [String]]? = nil
         ) {
             self.id = id
             self.name = name
@@ -106,6 +108,7 @@ final class EngineBridge {
             self.category = category
             self.tags = tags
             self.seeded = seeded
+            self.metadata = metadata
         }
     }
 
@@ -783,6 +786,48 @@ final class EngineBridge {
         )
     }
 
+    /// Goal decomposition orchestrator: a planner LLM breaks the goal into
+    /// subtasks, each run via a matched trained workflow or the agent loop,
+    /// stopping before any irreversible (purchase/reservation) step.
+    func startUltraplanTask(
+        goal: String,
+        webView: WKWebView,
+        tabId: UUID,
+        windowId: UUID,
+        browserManager: BrowserManager
+    ) {
+        guard !isExecuting else {
+            trajectoryLastError = "Cancel the running agent first"
+            return
+        }
+        executeWebView = webView
+        executeTabId = tabId
+        executeWindowId = windowId
+        executeBrowserManager = browserManager
+        trajectoryStepLog.removeAll()
+        trajectoryLastError = nil
+        currentTrajectoryTask = nil
+        revealCompositorForAgentRun()
+        sendBrowserUsePayload(
+            type: "start_ultraplan",
+            webView: webView,
+            extra: [
+                "goal": goal,
+                "task": ["goal": goal],
+                "maxSubtasks": 8,
+                "maxStepsPerSubtask": 40,
+                "safety": ["stopBeforePurchase": true],
+            ]
+        )
+    }
+
+    func cancelUltraplan() {
+        send(["type": "cancel_ultraplan"])
+        currentTrajectoryTask = nil
+        isExecuting = false
+        clearExecutionTarget()
+    }
+
     func exaSearch(query: String, timeoutSeconds: TimeInterval = 10, completion: @escaping (Result<String, Error>) -> Void) {
         guard isConnected else {
             completion(.failure(NSError(domain: "OpenHive", code: URLError.notConnectedToInternet.rawValue, userInfo: [NSLocalizedDescriptionKey: "Engine not connected"])))
@@ -1131,7 +1176,8 @@ final class EngineBridge {
                         steps: w["steps"] as? Int ?? 0,
                         category: w["category"] as? String ?? "other",
                         tags: w["tags"] as? [String] ?? [],
-                        seeded: w["seeded"] as? Bool ?? false
+                        seeded: w["seeded"] as? Bool ?? false,
+                        metadata: w["metadata"] as? [String: [String]]
                     )
                 }
             }
@@ -1278,13 +1324,13 @@ final class EngineBridge {
                 ok = pageResult.success
                 detail = pageResult.detail
                 if !ok, actionType == "click", let retryView = resolveExecuteWebView() {
-                    try? await Task.sleep(nanoseconds: 1_200_000_000)
+                    try? await Task.sleep(nanoseconds: 500_000_000)
                     pageResult = await WebViewAutomation.perform(action, on: retryView)
                     ok = pageResult.success
                     detail = pageResult.detail
                 }
                 if !ok, (actionType == "type" || actionType == "fill"), let retryView = resolveExecuteWebView() {
-                    try? await Task.sleep(nanoseconds: 800_000_000)
+                    try? await Task.sleep(nanoseconds: 400_000_000)
                     pageResult = await WebViewAutomation.perform(action, on: retryView)
                     ok = pageResult.success
                     detail = pageResult.detail
@@ -1371,6 +1417,37 @@ final class EngineBridge {
                     url: stepURL.isEmpty ? (resolveExecuteWebView()?.url?.absoluteString ?? "") : stepURL
                 )
             )
+        case "ultraplan_started":
+            isExecuting = true
+            let summary = json["summary"] as? String ?? "Ultraplan"
+            executionProgress = "Planning: \(summary)"
+            lastActionDescription = nil
+            AgentExecutionState.shared.begin(label: "Ultraplan", tier: 1)
+        case "ultraplan_subtask_started":
+            if let subtask = json["subtask"] as? [String: Any] {
+                let title = subtask["title"] as? String ?? "Subtask"
+                let index = json["index"] as? Int ?? 0
+                let total = json["total"] as? Int ?? 0
+                executionProgress = total > 0 ? "Ultraplan \(index)/\(total): \(title)" : "Ultraplan: \(title)"
+                lastActionDescription = title
+                AgentExecutionState.shared.update(label: title, tier: 1)
+            }
+        case "ultraplan_subtask_done":
+            if let subtask = json["subtask"] as? [String: Any] {
+                executionProgress = "Done: \(subtask["title"] as? String ?? "Subtask")"
+            }
+        case "ultraplan_input_required":
+            let question = json["question"] as? String ?? "Ultraplan needs more information."
+            trajectoryLastError = question
+            WorkflowManager.postToast(question, isError: true)
+        case "ultraplan_safety_stop":
+            let message = json["message"] as? String ?? "Stopped before purchase, payment, or reservation confirmation."
+            executionProgress = message
+            WorkflowManager.postToast(message)
+        case "ultraplan_done":
+            let success = json["success"] as? Bool ?? false
+            let message = success ? "Ultraplan complete" : "Ultraplan paused"
+            WorkflowManager.postToast(message, isError: !success)
         case "trajectory_complete":
             currentTrajectoryTask = nil
             isExecuting = false

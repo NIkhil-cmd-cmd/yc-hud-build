@@ -20,7 +20,8 @@ struct ShaderGradientWebView: NSViewRepresentable {
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.setValue(false, forKey: "drawsBackground")
-        webView.isOpaque = false
+        webView.wantsLayer = true
+        webView.layer?.backgroundColor = NSColor.clear.cgColor
         webView.allowsMagnification = false
         webView.allowsBackForwardNavigationGestures = false
         webView.navigationDelegate = context.coordinator
@@ -47,15 +48,14 @@ struct ShaderGradientWebView: NSViewRepresentable {
             guard let webView, !hostDidLoad else { return }
 
             guard let htmlURL = Bundle.main.url(
-                forResource: "index",
-                withExtension: "html",
-                subdirectory: "Resources/ShaderGradient"
-            ) else {
+                forResource: "shader-gradient",
+                withExtension: "html"
+            ),
+            let resourceURL = Bundle.main.resourceURL else {
                 return
             }
 
-            let folder = htmlURL.deletingLastPathComponent()
-            webView.loadFileURL(htmlURL, allowingReadAccessTo: folder)
+            webView.loadFileURL(htmlURL, allowingReadAccessTo: resourceURL)
         }
 
         func applyGradient(_ urlString: String) {
@@ -82,7 +82,10 @@ struct ShaderGradientWebView: NSViewRepresentable {
         }
 
         private static func jsonStringLiteral(for value: String) -> String? {
-            guard let data = try? JSONSerialization.data(withJSONObject: value),
+            // JSONSerialization rejects a top-level String and throws an ObjC
+            // NSException (which `try?` cannot catch) — use JSONEncoder, which
+            // encodes a top-level string and throws a catchable Swift error.
+            guard let data = try? JSONEncoder().encode(value),
                   let literal = String(data: data, encoding: .utf8) else { return nil }
             return literal
         }

@@ -64,9 +64,6 @@ struct SidebarWindowControlsView: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            MacButtonsView()
-                .frame(width: 70)
-
             Button("Toggle Sidebar", systemImage: nookSettings.sidebarPosition == .left ? "sidebar.left" : "sidebar.right") {
                 browserManager.toggleSidebar(for: windowState, floatingVisible: hoverSidebarManager.isOverlayVisible)
             }

@@ -3,6 +3,8 @@ import { useEffect } from "react";
 const DOWNLOAD_URL =
   "https://github.com/nook-browser/nook/releases/download/v1.0.2/Nook-v1.0.2.dmg";
 
+const SECTION_IDS = ["about", "highlights", "features", "pricing", "faq"];
+
 export function useSiteEffects() {
   useEffect(() => {
     const nav = document.querySelector(".nav");
@@ -25,6 +27,7 @@ export function useSiteEffects() {
 
   useEffect(() => {
     const revealEls = document.querySelectorAll(".reveal");
+    const prefersReduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const observer = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {
@@ -34,7 +37,10 @@ export function useSiteEffects() {
           }
         });
       },
-      { threshold: 0.12, rootMargin: "0px 0px -40px 0px" }
+      {
+        threshold: prefersReduced ? 0 : 0.08,
+        rootMargin: prefersReduced ? "0px" : "0px 0px -8% 0px",
+      }
     );
     revealEls.forEach((el) => observer.observe(el));
     return () => observer.disconnect();
@@ -46,6 +52,71 @@ export function useSiteEffects() {
         setTimeout(() => el.classList.add("visible"), 80 * i);
       });
     });
+  }, []);
+}
+
+export function useScrollChrome() {
+  useEffect(() => {
+    const bar = document.querySelector(".scroll-progress-bar");
+    const heroStack = document.querySelector(".hero-shader-stack");
+    const backToTop = document.querySelector(".back-to-top");
+    const prefersReduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    const onScroll = () => {
+      const scrollTop = window.scrollY;
+      const docHeight = document.documentElement.scrollHeight - window.innerHeight;
+      const progress = docHeight > 0 ? Math.min(1, scrollTop / docHeight) : 0;
+
+      if (bar) bar.style.transform = `scaleX(${progress})`;
+
+      if (heroStack && !prefersReduced) {
+        const hero = document.querySelector(".hero");
+        const heroHeight = hero?.offsetHeight ?? window.innerHeight;
+        const t = Math.min(1, scrollTop / heroHeight);
+        heroStack.style.setProperty("--hero-scroll", String(t));
+      }
+
+      if (backToTop) {
+        backToTop.classList.toggle("visible", scrollTop > window.innerHeight * 0.65);
+      }
+    };
+
+    backToTop?.addEventListener("click", () => {
+      window.scrollTo({ top: 0, behavior: prefersReduced ? "auto" : "smooth" });
+    });
+
+    window.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+}
+
+export function useActiveSectionNav() {
+  useEffect(() => {
+    const links = document.querySelectorAll(".nav-links a[data-section], .section-jump a[data-section]");
+    if (links.length === 0) return;
+
+    const sections = SECTION_IDS.map((id) => document.getElementById(id)).filter(Boolean);
+    if (sections.length === 0) return;
+
+    const setActive = (id) => {
+      links.forEach((link) => {
+        link.classList.toggle("active", link.getAttribute("data-section") === id);
+      });
+    };
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries
+          .filter((e) => e.isIntersecting)
+          .sort((a, b) => b.intersectionRatio - a.intersectionRatio);
+        if (visible[0]?.target?.id) setActive(visible[0].target.id);
+      },
+      { rootMargin: "-35% 0px -45% 0px", threshold: [0, 0.15, 0.4] }
+    );
+
+    sections.forEach((section) => observer.observe(section));
+    return () => observer.disconnect();
   }, []);
 }
 

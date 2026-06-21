@@ -348,18 +348,18 @@ struct WorkflowCatalogView: View {
         if webView.url?.absoluteString.contains("travel/flights") != true {
             webView.load(URLRequest(url: flightsURL))
         }
-        for _ in 0..<80 {
+        var formReady = false
+        for _ in 0..<60 {
             let url = webView.url?.absoluteString ?? ""
             if url.contains("travel/flights") {
                 let hasForm = try? await webView.evaluateJavaScript(
                     "document.body && document.body.innerText.toLowerCase().includes('where from')"
                 ) as? Bool
-                if hasForm == true { break }
+                if hasForm == true { formReady = true; break }
             }
-            try? await Task.sleep(nanoseconds: 250_000_000)
+            try? await Task.sleep(nanoseconds: 120_000_000)
         }
-        await WebViewAutomation.waitForSettle(on: webView, actionType: "navigate")
-        try? await Task.sleep(nanoseconds: 1_500_000_000)
+        try? await Task.sleep(nanoseconds: (formReady ? 300 : 1_200) * 1_000_000)
         OpenHiveObservation.inject(into: webView)
         await OpenHiveObservation.installAgentAutomation(on: webView)
     }

@@ -5,13 +5,12 @@
 //  Global push-to-talk voice control for the OpenHive agent.
 //
 //  Flow: a global ⌘+⌥ tap opens the Agent Notch in a "Listening" state, speaks a
-//  short audible cue, transcribes speech live via the on-device Speech framework,
-//  and dispatches the final transcript to the browser agent (EngineBridge).
+//  short audible cue, records the mic, transcribes via OpenAI Whisper, and
+//  dispatches the transcript to the browser agent (EngineBridge).
 //
 
 import AppKit
 import AVFoundation
-import Speech
 import SwiftUI
 
 @MainActor
@@ -21,25 +20,32 @@ final class VoiceInputManager: NSObject {
 
     // MARK: Observable UI state (read by AgentNotchView)
     private(set) var isListening: Bool = false
+    private(set) var isTranscribing: Bool = false
     private(set) var transcript: String = ""
     private(set) var statusText: String = ""
+    /// Smoothed mic level 0...1 for the notch waveform.
+    private(set) var audioLevel: CGFloat = 0
 
     // MARK: Dependencies (wired from NookApp)
     weak var browserManager: BrowserManager?
     weak var windowRegistry: WindowRegistry?
 
-    // MARK: Speech / audio
-    private let speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
-    private let audioEngine = AVAudioEngine()
-    private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
-    private var recognitionTask: SFSpeechRecognitionTask?
+    // MARK: Audio
+    private var recorder: AVAudioRecorder?
+    private var recordingURL: URL?
     private let synthesizer = AVSpeechSynthesizer()
 
-    private var silenceTimer: Timer?
+    private var meterTimer: Timer?
     private var maxDurationTimer: Timer?
+    private var hasHeardSpeech = false
+    private var silentTicks = 0
 
-    /// Stop after this much silence following speech.
-    private let silenceTimeout: TimeInterval = 1.8
+    /// Mic level (dBFS) above which we consider the user to be speaking.
+    private let speechThresholdDB: Float = -30
+    /// Meter polling interval.
+    private let meterInterval: TimeInterval = 0.08
+    /// Consecutive silent ticks (after speech) before auto-stopping (~1.6s).
+    private let silenceTicksToStop = 20
     /// Hard cap on a single listening session.
     private let maxListeningDuration: TimeInterval = 30
 
@@ -72,15 +78,18 @@ final class VoiceInputManager: NSObject {
     private func installHotkeyMonitors() {
         guard flagsMonitorLocal == nil else { return }
 
+        // NSEvent monitor closures run on the main thread; this manager is @MainActor,
+        // so the (non-Sendable) closures inherit main-actor isolation and may call
+        // main-actor methods directly — same pattern as KeyboardShortcutManager.
         flagsMonitorGlobal = NSEvent.addGlobalMonitorForEvents(matching: [.flagsChanged]) { [weak self] event in
-            Task { @MainActor in self?.handleFlagsChanged(event) }
+            self?.handleFlagsChanged(event)
         }
         flagsMonitorLocal = NSEvent.addLocalMonitorForEvents(matching: [.flagsChanged]) { [weak self] event in
-            Task { @MainActor in self?.handleFlagsChanged(event) }
+            self?.handleFlagsChanged(event)
             return event
         }
         keyMonitorGlobal = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
-            Task { @MainActor in self?.handleKeyDown(event) }
+            self?.handleKeyDown(event)
         }
         keyMonitorLocal = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
             // Escape cancels an active listening session and consumes the key.
@@ -88,7 +97,7 @@ final class VoiceInputManager: NSObject {
                 self.stopListening(submit: false)
                 return nil
             }
-            Task { @MainActor in self?.handleKeyDown(event) }
+            self?.handleKeyDown(event)
             return event
         }
     }
@@ -127,135 +136,199 @@ final class VoiceInputManager: NSObject {
     func toggle() {
         if isListening {
             stopListening(submit: true)
-        } else {
+        } else if !isTranscribing {
             startListening()
         }
     }
 
     func startListening() {
-        guard !isListening else { return }
+        guard !isListening, !isTranscribing else { return }
+        guard VoiceConfig.resolvedAPIKey != nil else {
+            WorkflowManager.postToast("Add your OpenAI API key in VoiceConfig.swift to use voice", isError: true)
+            return
+        }
+        statusText = "Preparing…"
 
-        ensureAuthorized { [weak self] granted in
-            guard let self else { return }
-            guard granted else {
-                self.presentPermissionError()
-                return
+        AVCaptureDevice.requestAccess(for: .audio) { granted in
+            // Only a Sendable Bool crosses the actor boundary here.
+            Task { @MainActor in
+                if granted {
+                    VoiceInputManager.shared.beginRecording()
+                } else {
+                    VoiceInputManager.shared.presentPermissionError()
+                }
             }
-            self.beginRecognition()
         }
     }
 
-    private func beginRecognition() {
-        guard let recognizer = speechRecognizer, recognizer.isAvailable else {
-            statusText = "Speech recognition unavailable"
-            WorkflowManager.postToast("Speech recognition unavailable on this Mac", isError: true)
-            return
-        }
+    private func beginRecording() {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("nook-voice-\(UUID().uuidString).m4a")
+        let settings: [String: Any] = [
+            AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
+            AVSampleRateKey: 16_000,
+            AVNumberOfChannelsKey: 1,
+            AVEncoderAudioQualityKey: AVAudioQuality.medium.rawValue,
+        ]
 
-        // Reset any prior session.
-        recognitionTask?.cancel()
-        recognitionTask = nil
-        transcript = ""
-
-        let request = SFSpeechAudioBufferRecognitionRequest()
-        request.shouldReportPartialResults = true
-        recognitionRequest = request
-
-        let inputNode = audioEngine.inputNode
-        let format = inputNode.outputFormat(forBus: 0)
-
-        // A zero-channel format means no usable input device.
-        guard format.channelCount > 0 else {
-            statusText = "No microphone available"
-            WorkflowManager.postToast("No microphone available", isError: true)
-            recognitionRequest = nil
-            return
-        }
-
-        inputNode.removeTap(onBus: 0)
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
-            self?.recognitionRequest?.append(buffer)
-        }
-
-        audioEngine.prepare()
         do {
-            try audioEngine.start()
+            let rec = try AVAudioRecorder(url: url, settings: settings)
+            rec.isMeteringEnabled = true
+            guard rec.record() else {
+                throw NSError(domain: "VoiceInput", code: -1,
+                              userInfo: [NSLocalizedDescriptionKey: "Recorder failed to start"])
+            }
+            recorder = rec
+            recordingURL = url
         } catch {
-            statusText = "Couldn't start microphone"
+            statusText = ""
             WorkflowManager.postToast("Couldn't start microphone: \(error.localizedDescription)", isError: true)
-            cleanupAudio()
             return
         }
 
         isListening = true
+        transcript = ""
+        hasHeardSpeech = false
+        silentTicks = 0
+        audioLevel = 0
         statusText = "Listening…"
         showNotch()
         speakCue()
-        armMaxDurationTimer()
-
-        recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
-            Task { @MainActor in
-                guard let self else { return }
-                if let result {
-                    self.transcript = result.bestTranscription.formattedString
-                    self.resetSilenceTimer()
-                }
-                if error != nil || (result?.isFinal ?? false) {
-                    // Finalize: submit whatever we have if this wasn't a manual cancel.
-                    if self.isListening {
-                        self.stopListening(submit: true)
-                    }
-                }
-            }
-        }
+        armTimers()
     }
 
     func stopListening(submit: Bool) {
         guard isListening else { return }
         isListening = false
-        silenceTimer?.invalidate(); silenceTimer = nil
+        meterTimer?.invalidate(); meterTimer = nil
         maxDurationTimer?.invalidate(); maxDurationTimer = nil
+        audioLevel = 0
 
-        recognitionRequest?.endAudio()
-        cleanupAudio()
-        recognitionTask?.cancel()
-        recognitionTask = nil
-        recognitionRequest = nil
+        recorder?.stop()
+        let url = recordingURL
+        recorder = nil
+        recordingURL = nil
 
-        let finalText = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-        statusText = ""
+        guard submit, let url else {
+            statusText = ""
+            if let url { try? FileManager.default.removeItem(at: url) }
+            settleNotchIfIdle()
+            return
+        }
 
-        if submit, !finalText.isEmpty {
-            dispatchToAgent(prompt: finalText)
-        } else {
-            // Nothing to run — let the notch settle back.
-            if TaskRunState.shared.phase != .running && !EngineBridge.shared.isExecuting {
-                AgentNotchViewModel.shared.close()
+        transcribeAndDispatch(url: url)
+    }
+
+    // MARK: - Metering / silence detection
+
+    private func armTimers() {
+        meterTimer = Timer.scheduledTimer(withTimeInterval: meterInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.pollMeter() }
+        }
+        maxDurationTimer = Timer.scheduledTimer(withTimeInterval: maxListeningDuration, repeats: false) { [weak self] _ in
+            Task { @MainActor in self?.stopListening(submit: true) }
+        }
+    }
+
+    private func pollMeter() {
+        guard let recorder, isListening else { return }
+        recorder.updateMeters()
+        let power = recorder.averagePower(forChannel: 0)
+
+        // Map dBFS (-60...0) to 0...1 for the waveform.
+        let normalized = max(0, min(1, CGFloat((power + 60) / 60)))
+        audioLevel = audioLevel * 0.6 + normalized * 0.4
+
+        if power > speechThresholdDB {
+            hasHeardSpeech = true
+            silentTicks = 0
+        } else if hasHeardSpeech {
+            silentTicks += 1
+            if silentTicks >= silenceTicksToStop {
+                stopListening(submit: true)
             }
         }
     }
 
-    private func cleanupAudio() {
-        if audioEngine.isRunning {
-            audioEngine.stop()
+    // MARK: - Transcription (OpenAI Whisper)
+
+    private func transcribeAndDispatch(url: URL) {
+        guard let apiKey = VoiceConfig.resolvedAPIKey else {
+            WorkflowManager.postToast("Missing OpenAI API key", isError: true)
+            settleNotchIfIdle()
+            return
         }
-        audioEngine.inputNode.removeTap(onBus: 0)
+
+        isTranscribing = true
+        statusText = "Transcribing…"
+
+        Task { @MainActor in
+            defer {
+                isTranscribing = false
+                try? FileManager.default.removeItem(at: url)
+            }
+            do {
+                let text = try await Self.transcribe(fileURL: url, apiKey: apiKey)
+                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                transcript = trimmed
+                statusText = ""
+                if trimmed.isEmpty {
+                    WorkflowManager.postToast("Didn't catch that — try again", isError: true)
+                    settleNotchIfIdle()
+                } else {
+                    dispatchToAgent(prompt: trimmed)
+                }
+            } catch {
+                statusText = ""
+                WorkflowManager.postToast("Transcription failed: \(error.localizedDescription)", isError: true)
+                settleNotchIfIdle()
+            }
+        }
     }
 
-    // MARK: - Timers
+    /// Performs a multipart POST to OpenAI's transcription endpoint. Runs off the main actor.
+    nonisolated private static func transcribe(fileURL: URL, apiKey: String) async throws -> String {
+        let audioData = try Data(contentsOf: fileURL)
+        let boundary = "Boundary-\(UUID().uuidString)"
 
-    private func resetSilenceTimer() {
-        silenceTimer?.invalidate()
-        silenceTimer = Timer.scheduledTimer(withTimeInterval: silenceTimeout, repeats: false) { [weak self] _ in
-            Task { @MainActor in self?.stopListening(submit: true) }
-        }
-    }
+        var request = URLRequest(url: URL(string: VoiceConfig.transcriptionEndpoint)!)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 30
 
-    private func armMaxDurationTimer() {
-        maxDurationTimer?.invalidate()
-        maxDurationTimer = Timer.scheduledTimer(withTimeInterval: maxListeningDuration, repeats: false) { [weak self] _ in
-            Task { @MainActor in self?.stopListening(submit: true) }
+        var body = Data()
+        func appendField(_ name: String, _ value: String) {
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n".data(using: .utf8)!)
+            body.append("\(value)\r\n".data(using: .utf8)!)
         }
+        appendField("model", VoiceConfig.transcriptionModel)
+        appendField("response_format", "json")
+
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"audio.m4a\"\r\n".data(using: .utf8)!)
+        body.append("Content-Type: audio/m4a\r\n\r\n".data(using: .utf8)!)
+        body.append(audioData)
+        body.append("\r\n".data(using: .utf8)!)
+        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+
+        request.httpBody = body
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw NSError(domain: "VoiceInput", code: -2,
+                          userInfo: [NSLocalizedDescriptionKey: "No HTTP response"])
+        }
+        guard http.statusCode == 200 else {
+            let detail = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])
+                .flatMap { ($0?["error"] as? [String: Any])?["message"] as? String }
+                ?? "HTTP \(http.statusCode)"
+            throw NSError(domain: "VoiceInput", code: http.statusCode,
+                          userInfo: [NSLocalizedDescriptionKey: detail])
+        }
+        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        return (json?["text"] as? String) ?? ""
     }
 
     // MARK: - Notch + cue
@@ -265,6 +338,12 @@ final class VoiceInputManager: NSObject {
         AgentNotchViewModel.shared.open()
     }
 
+    private func settleNotchIfIdle() {
+        if TaskRunState.shared.phase != .running && !EngineBridge.shared.isExecuting {
+            AgentNotchViewModel.shared.close()
+        }
+    }
+
     private func speakCue() {
         let utterance = AVSpeechUtterance(string: "Listening")
         utterance.rate = AVSpeechUtteranceDefaultSpeechRate
@@ -272,21 +351,10 @@ final class VoiceInputManager: NSObject {
         synthesizer.speak(utterance)
     }
 
-    // MARK: - Authorization
-
-    private func ensureAuthorized(_ completion: @escaping (Bool) -> Void) {
-        SFSpeechRecognizer.requestAuthorization { speechStatus in
-            let speechOK = speechStatus == .authorized
-            AVCaptureDevice.requestAccess(for: .audio) { micOK in
-                Task { @MainActor in completion(speechOK && micOK) }
-            }
-        }
-    }
-
     private func presentPermissionError() {
         statusText = ""
         WorkflowManager.postToast(
-            "Enable Microphone + Speech Recognition for Nook in System Settings → Privacy",
+            "Enable Microphone access for Nook in System Settings → Privacy",
             isError: true
         )
     }

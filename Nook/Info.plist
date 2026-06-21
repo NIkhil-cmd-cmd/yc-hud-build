@@ -20,8 +20,6 @@
 	<string>Owner</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Nook uses the microphone so you can speak commands for the AI agent to carry out in the browser.</string>
-	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Nook transcribes your spoken commands so the AI agent can complete tasks in the browser.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>

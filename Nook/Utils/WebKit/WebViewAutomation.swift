@@ -44,17 +44,19 @@ enum WebViewAutomation {
     }
 
     static func waitForSettle(on webView: WKWebView, actionType: String) async {
-        let minMs: UInt64 = actionType == "navigate" ? 1_200 : 500
+        // Small floor, then poll readyState and bail the instant the doc is ready.
+        let minMs: UInt64 = actionType == "navigate" ? 250 : 60
         try? await Task.sleep(nanoseconds: minMs * 1_000_000)
 
-        for _ in 0..<25 {
+        let maxPolls = actionType == "navigate" ? 20 : 5
+        for _ in 0..<maxPolls {
             let ready = try? await webView.evaluateJavaScript("document.readyState") as? String
             if ready == "complete" { break }
-            try? await Task.sleep(nanoseconds: 150_000_000)
+            try? await Task.sleep(nanoseconds: 90_000_000)
         }
 
-        // Let SPAs finish rendering overlays (Google Flights, etc.)
-        let extraMs: UInt64 = actionType == "navigate" ? 800 : 350
+        // Brief tail for SPAs to render overlays (Google Flights, etc.)
+        let extraMs: UInt64 = actionType == "navigate" ? 220 : 100
         try? await Task.sleep(nanoseconds: extraMs * 1_000_000)
     }
 

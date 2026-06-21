@@ -616,7 +616,7 @@ struct AgentHomeView: View {
         }
 
         var formReady = false
-        for _ in 0..<80 {
+        for _ in 0..<60 {
             let url = webView.url?.absoluteString ?? ""
             if url.contains("travel/flights") {
                 let hasForm = try? await webView.evaluateJavaScript(
@@ -627,15 +627,11 @@ struct AgentHomeView: View {
                     break
                 }
             }
-            try? await Task.sleep(nanoseconds: 250_000_000)
+            try? await Task.sleep(nanoseconds: 120_000_000)
         }
 
-        await WebViewAutomation.waitForSettle(on: webView, actionType: "navigate")
-        if !formReady {
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
-        } else {
-            try? await Task.sleep(nanoseconds: 1_500_000_000)
-        }
+        // Form already detected above; just a short tail for the SPA to settle.
+        try? await Task.sleep(nanoseconds: (formReady ? 300 : 1_200) * 1_000_000)
         OpenHiveObservation.inject(into: webView)
         await OpenHiveObservation.installAgentAutomation(on: webView)
     }

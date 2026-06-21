@@ -14,6 +14,7 @@ struct AgentNotchView: View {
     @Bindable var voice = VoiceInputManager.shared
 
     @State private var hoverTask: Task<Void, Never>?
+    @State private var micHover: Bool = false
 
     private let animationSpring = Animation.interactiveSpring(
         response: 0.38, dampingFraction: 0.8, blendDuration: 0
@@ -92,16 +93,13 @@ struct AgentNotchView: View {
     @ViewBuilder
     private var notchLayout: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if vm.notchState == .open {
-                openHeader
-                    .frame(height: max(24, vm.effectiveClosedNotchHeight))
-            } else {
-                closedBar
-                    .frame(height: vm.effectiveClosedNotchHeight, alignment: .center)
-            }
+            // The physical camera notch lives in this top strip. Only tiny controls
+            // sit in the side "wings"; the camera center is always kept clear.
+            notchTopStrip
+                .frame(height: max(22, vm.effectiveClosedNotchHeight))
 
             if vm.notchState == .open {
-                expandedContent
+                expandedBody
                     .transition(
                         .scale(scale: 0.92, anchor: .top)
                             .combined(with: .opacity)
@@ -111,26 +109,82 @@ struct AgentNotchView: View {
         }
     }
 
-    private var closedBar: some View {
-        HStack(spacing: 6) {
-            statusIndicator
-            Text(primaryLabel)
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.white)
-                .lineLimit(1)
-            Spacer(minLength: 0)
-            if isActive {
-                closedStatPill(formatElapsed(liveElapsedMs))
-                closedStatPill("\(liveTokens)tk")
-                closedStatPill(stepProgressLabel)
-                if let stateId = runState.liveStateId ?? runState.mdpStateId {
-                    closedStatPill("S\(stateId)")
+    /// Width reserved across the top strip for the physical notch (camera).
+    private var cameraReserveWidth: CGFloat {
+        max(vm.closedNotchSize.width, 140)
+    }
+
+    @ViewBuilder
+    private var notchTopStrip: some View {
+        if vm.notchState == .open {
+            HStack(spacing: 0) {
+                // Left wing — status only (kept off the camera).
+                HStack(spacing: 5) {
+                    statusIndicator
                 }
-            } else {
-                closedStatPill(engine.engineReady ? shortModel : "off")
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                // Reserved camera zone — never draw text here.
+                Color.clear.frame(width: cameraReserveWidth)
+
+                // Right wing — interactive controls.
+                HStack(spacing: 6) {
+                    micButton
+                    if engine.isExecuting { stopButton }
+                }
+                .frame(maxWidth: .infinity, alignment: .trailing)
             }
+            .padding(.horizontal, 2)
+        } else {
+            // Closed: an empty black notch that hugs the physical notch.
+            Color.clear
         }
-        .padding(.horizontal, 10)
+    }
+
+    /// All text-bearing content sits BELOW the camera strip.
+    private var expandedBody: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text(primaryLabel)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                if isActive { liveClockBadge }
+            }
+            expandedContent
+        }
+        .padding(.top, 4)
+    }
+
+    private var micButton: some View {
+        Image(systemName: voice.isTranscribing ? "waveform" : (isListening ? "mic.fill" : "mic"))
+            .font(.system(size: 11, weight: .bold))
+            .foregroundStyle(isListening ? Color.red : .white.opacity(0.7))
+            .frame(width: 22, height: 22)
+            .background(.white.opacity(micHover ? 0.2 : 0.08), in: Circle())
+            .scaleEffect(micHover ? 1.08 : 1)
+            .contentShape(Circle())
+            .onHover { hovering in
+                withAnimation(.easeOut(duration: 0.15)) { micHover = hovering }
+            }
+            .onTapGesture { voice.toggle() }
+            .symbolEffect(.pulse, options: isListening ? .repeating : .nonRepeating)
+            .help(isListening ? "Stop listening" : "Start voice command (⌘⌥)")
+    }
+
+    private var stopButton: some View {
+        Button {
+            engine.cancelExecution()
+            engine.cancelTrajectory()
+            runState.phase = .idle
+        } label: {
+            Image(systemName: "stop.fill")
+                .font(.system(size: 8, weight: .bold))
+        }
+        .controlSize(.mini)
+        .buttonStyle(.borderless)
+        .foregroundStyle(.red.opacity(0.85))
     }
 
     private var liveClockBadge: some View {
@@ -145,39 +199,6 @@ struct AgentNotchView: View {
         if tokens.currentRunElapsedMs > 0 { return tokens.currentRunElapsedMs }
         guard let start = runState.runStartedAt else { return 0 }
         return max(0, Int(Date().timeIntervalSince(start) * 1000))
-    }
-
-    private var openHeader: some View {
-        HStack(spacing: 6) {
-            statusIndicator
-            Text(primaryLabel)
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.9))
-                .lineLimit(1)
-            Spacer(minLength: 0)
-            if runState.backgroundModeEnabled, isActive {
-                Image(systemName: "arrow.up.right.square")
-                    .font(.system(size: 8, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.45))
-            }
-            if isActive {
-                liveClockBadge
-            }
-            if engine.isExecuting {
-                Button {
-                    engine.cancelExecution()
-                    engine.cancelTrajectory()
-                    runState.phase = .idle
-                } label: {
-                    Image(systemName: "stop.fill")
-                        .font(.system(size: 8, weight: .bold))
-                }
-                .controlSize(.mini)
-                .buttonStyle(.borderless)
-                .foregroundStyle(.red.opacity(0.85))
-            }
-        }
-        .padding(.horizontal, 2)
     }
 
     @ViewBuilder
@@ -377,12 +398,6 @@ struct AgentNotchView: View {
                 .fill(engine.engineReady ? Color.green.opacity(0.75) : Color.orange)
                 .frame(width: 6, height: 6)
         }
-    }
-
-    private func closedStatPill(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 9, weight: .medium, design: .monospaced))
-            .foregroundStyle(.white.opacity(0.5))
     }
 
     private func statPill(_ label: String, value: String) -> some View {

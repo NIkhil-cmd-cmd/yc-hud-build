@@ -7,7 +7,7 @@ import AppKit
 
 enum NotchSizing {
     static let shadowPadding: CGFloat = 20
-    static let openNotchSize = CGSize(width: 340, height: 108)
+    static let openNotchSize = CGSize(width: 360, height: 138)
     static var windowSize: CGSize {
         CGSize(width: openNotchSize.width, height: openNotchSize.height + shadowPadding)
     }
