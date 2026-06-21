@@ -15,8 +15,7 @@ from pathlib import Path
 import websockets
 from websockets.client import WebSocketClientProtocol
 
-# Import proven logic from local smoke
-from smoke.run_local_browser_trace_gate import (
+from run_local_browser_trace_gate import (
     scripted_action,
     reached_results,
     TASK_MATRIX,

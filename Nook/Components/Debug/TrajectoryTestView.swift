@@ -2,15 +2,16 @@
 //  TrajectoryTestView.swift
 //  OpenHive
 //
-//  Debug panel for Google Flights trajectory smoke tests in the current tab.
+//  Test view for running multi-step trajectories via EngineBridge.
 //
 
 import SwiftUI
+import WebKit
 
 struct TrajectoryTestView: View {
-    @EnvironmentObject private var browserManager: BrowserManager
-
-    private var bridge: EngineBridge { EngineBridge.shared }
+    @StateObject private var bridge = EngineBridge.shared
+    @State private var webView = WKWebView()
+    @State private var showWebView = true
 
     let testTasks = [
         ("BOS", "LAX", "2026-07-15"),
@@ -19,136 +20,199 @@ struct TrajectoryTestView: View {
     ]
 
     var body: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 0) {
+            // Status bar
             statusBar
+
+            // WebView
+            if showWebView {
+                WebViewContainer(webView: $webView, bridge: bridge)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+
+            Divider()
+
+            // Step log
             stepLog
+                .frame(height: 200)
+
+            Divider()
+
+            // Controls
             controls
+                .padding()
         }
-        .padding(20)
-        .frame(minWidth: 520, minHeight: 420)
+        .onAppear {
+            bridge.webView = webView
+        }
     }
 
     private var statusBar: some View {
         HStack {
+            // Connection status
             Circle()
-                .fill(bridge.isConnected ? Color.green : Color.red)
-                .frame(width: 10, height: 10)
-            Text(bridge.isConnected ? "Engine connected" : "Engine offline")
+                .fill(bridge.connected ? Color.green : Color.red)
+                .frame(width: 12, height: 12)
+            Text(bridge.connected ? "Connected" : "Disconnected")
                 .font(.caption)
 
             Spacer()
 
-            if let task = bridge.currentTrajectoryTask {
-                Text("\(task.origin) → \(task.destination) · \(task.departDate)")
+            // Current task
+            if let task = bridge.currentTask {
+                Text("\(task.origin) → \(task.destination)")
                     .font(.caption.monospaced())
             }
 
-            Text("\(bridge.trajectoryStepLog.count) steps")
+            Spacer()
+
+            // Step count
+            Text("\(bridge.stepLog.count) steps")
                 .font(.caption.monospaced())
+
+            // Toggle webview
+            Button(showWebView ? "Hide Browser" : "Show Browser") {
+                showWebView.toggle()
+            }
+            .font(.caption)
         }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+        .background(Color(nsColor: .controlBackgroundColor))
     }
 
     private var stepLog: some View {
-        GroupBox("Step log") {
-            ScrollView {
+        ScrollView {
+            ScrollViewReader { proxy in
                 LazyVStack(alignment: .leading, spacing: 4) {
-                    if bridge.trajectoryStepLog.isEmpty {
-                        Text("Run a quick test to see steps here.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(bridge.trajectoryStepLog) { step in
-                            HStack(spacing: 8) {
-                                Text("\(step.index)")
-                                    .font(.caption.monospaced())
-                                    .foregroundStyle(.secondary)
-                                    .frame(width: 24, alignment: .trailing)
-                                Text(step.actionType)
-                                    .font(.caption.monospaced())
-                                    .frame(width: 72, alignment: .leading)
-                                Text(step.url)
-                                    .font(.caption)
-                                    .lineLimit(1)
-                                    .foregroundStyle(.secondary)
-                                Spacer()
-                            }
+                    ForEach(bridge.stepLog) { step in
+                        HStack {
+                            Text("\(step.index)")
+                                .font(.caption.monospaced())
+                                .foregroundColor(.secondary)
+                                .frame(width: 30, alignment: .trailing)
+
+                            Text(step.actionType)
+                                .font(.caption.monospaced())
+                                .frame(width: 80, alignment: .leading)
+
+                            Text(step.url)
+                                .font(.caption)
+                                .lineLimit(1)
+                                .foregroundColor(.secondary)
+
+                            Spacer()
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                        .id(step.id)
+                    }
+                }
+                .onChange(of: bridge.stepLog.count) { _ in
+                    if let last = bridge.stepLog.last {
+                        withAnimation {
+                            proxy.scrollTo(last.id, anchor: .bottom)
                         }
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(height: 180)
         }
+        .background(Color(nsColor: .textBackgroundColor))
     }
 
     private var controls: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(spacing: 12) {
+            // Connection
             HStack {
-                Button(bridge.isConnected ? "Reconnect" : "Connect Engine") {
-                    bridge.connect()
-                }
-                Button("Clear Log") {
-                    bridge.trajectoryStepLog.removeAll()
-                }
-                if bridge.currentTrajectoryTask != nil || bridge.isExecuting {
-                    Button("Cancel") {
-                        bridge.cancelTrajectory()
+                Button(bridge.connected ? "Disconnect" : "Connect") {
+                    if bridge.connected {
+                        bridge.disconnect()
+                    } else {
+                        bridge.connect()
                     }
                 }
+
+                Button("Clear Log") {
+                    bridge.stepLog.removeAll()
+                }
+
                 Spacer()
             }
 
-            Text("Runs via browser-use (Chromium). Your Nook tab mirrors agent URLs; cookies sync from the current profile.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            Divider()
 
-            Text("Quick tests")
-                .font(.caption.weight(.semibold))
+            // Quick test tasks
+            Text("Quick Tests:")
+                .font(.caption)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
-                ForEach(Array(testTasks.enumerated()), id: \.offset) { _, task in
+                ForEach(Array(testTasks.enumerated()), id: \.offset) { index, task in
                     Button("\(task.0) → \(task.1)") {
                         runTask(origin: task.0, destination: task.1, date: task.2)
                     }
-                    .disabled(!canRun)
+                    .disabled(!bridge.connected || bridge.currentTask != nil)
                 }
             }
 
-            if let error = bridge.trajectoryLastError ?? bridge.connectionError {
-                Text(error)
+            if let error = bridge.lastError {
+                Text("Error: \(error)")
                     .font(.caption)
-                    .foregroundStyle(.red)
+                    .foregroundColor(.red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
 
-    private var canRun: Bool {
-        bridge.isConnected && !bridge.isExecuting && bridge.currentTrajectoryTask == nil
-    }
-
     private func runTask(origin: String, destination: String, date: String) {
-        guard canRun else { return }
-        guard let tab = browserManager.currentTabForActiveWindow(),
-              let windowId = browserManager.windowRegistry?.activeWindow?.id,
-              let webView = browserManager.getWebView(for: tab.id, in: windowId) else {
-            bridge.trajectoryLastError = "Select a tab in the main window first"
-            return
+        guard bridge.connected else { return }
+
+        // Clear previous state
+        bridge.stepLog.removeAll()
+
+        // Execute
+        bridge.executeTask(origin: origin, destination: destination, date: date)
+    }
+}
+
+/// WebView container that attaches to EngineBridge
+struct WebViewContainer: NSViewRepresentable {
+    @Binding var webView: WKWebView
+    let bridge: EngineBridge
+
+    func makeNSView(context: Context) -> WKWebView {
+        let config = WKWebViewConfiguration()
+        config.preferences.setValue(true, forKey: "developerExtrasEnabled")
+
+        let wv = WKWebView(frame: .zero, configuration: config)
+        wv.navigationDelegate = context.coordinator
+
+        DispatchQueue.main.async {
+            webView = wv
+            bridge.webView = wv
         }
 
-        bridge.trajectoryStepLog.removeAll()
-        bridge.startTrajectory(
-            origin: origin,
-            destination: destination,
-            departDate: date,
-            webView: webView,
-            tabId: tab.id,
-            windowId: windowId,
-            browserManager: browserManager
-        )
+        return wv
+    }
+
+    func updateNSView(_ nsView: WKWebView, context: Context) {}
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    class Coordinator: NSObject, WKNavigationDelegate {
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            print("[WebView] Navigation finished: \(webView.url?.absoluteString ?? "")")
+        }
+
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            print("[WebView] Navigation failed: \(error.localizedDescription)")
+        }
     }
 }
 
 #Preview {
     TrajectoryTestView()
-        .environmentObject(BrowserManager())
+        .frame(width: 1200, height: 800)
 }
