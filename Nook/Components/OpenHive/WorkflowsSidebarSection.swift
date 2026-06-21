@@ -84,6 +84,15 @@ struct WorkflowsSidebarSection: View {
 
             Spacer()
 
+            Button {
+                graphWorkflow = GraphSheetItem(id: wf.id)
+            } label: {
+                Image(systemName: "point.3.connected.trianglepath.dotted")
+                    .font(.system(size: 11))
+            }
+            .buttonStyle(.borderless)
+            .help("View MDP")
+
             Button("Run") {
                 runWorkflow(wf)
             }

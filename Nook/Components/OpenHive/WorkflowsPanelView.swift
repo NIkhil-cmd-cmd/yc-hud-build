@@ -147,7 +147,7 @@ struct WorkflowsPanelView: View {
                                 .font(.caption)
                         }
                         .buttonStyle(.borderless)
-                        .help("View graph")
+                        .help("View MDP graph")
                         Button("Run") { runWorkflow(wf.id) }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
