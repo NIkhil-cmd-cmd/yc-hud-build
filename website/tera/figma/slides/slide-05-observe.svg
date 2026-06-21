@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" fill="none">
+  <rect width="1920" height="1080" fill="#090909"/>
+  <radialGradient id="g" cx="75%" cy="40%" r="50%"><stop offset="0%" stop-color="#12A884" stop-opacity="0.12"/><stop offset="100%" stop-color="#090909" stop-opacity="0"/></radialGradient>
+  <rect width="1920" height="1080" fill="url(#g)"/>
+
+  <text x="100" y="100" font-family="'DM Sans',system-ui,sans-serif" font-size="11" fill="#12A884" letter-spacing="0.14em" font-weight="600">STEP 1 / OBSERVE</text>
+  <text x="100" y="200" font-family="Georgia,'Instrument Serif',serif" font-size="68" fill="#F5F2EC" letter-spacing="-0.02em">Passive learning. Always on.</text>
+  <text x="100" y="290" font-family="'DM Sans',system-ui,sans-serif" font-size="24" fill="#A3A39D">No record button. OpenHiveObservation injects on every tab - clicks, navigation, and inputs become training data.</text>
+
+  <rect x="100" y="360" width="1720" height="580" rx="28" fill="#141414" stroke="#ffffff" stroke-opacity="0.08"/>
+  <rect x="100" y="360" width="1720" height="48" rx="28" fill="#1c1c1a"/>
+  <rect x="100" y="384" width="1720" height="24" fill="#1c1c1a"/>
+  <circle cx="140" cy="384" r="7" fill="#5c5c58"/><circle cx="164" cy="384" r="7" fill="#5c5c58"/><circle cx="188" cy="384" r="7" fill="#5c5c58"/>
+  <rect x="240" y="372" width="480" height="24" rx="12" fill="#090909" stroke="#ffffff" stroke-opacity="0.06"/>
+  <text x="260" y="389" font-family="'DM Sans',system-ui,sans-serif" font-size="12" fill="#7A7A74">google.com/flights - active tab</text>
+
+  <rect x="140" y="440" width="1640" height="460" rx="12" fill="#111110"/>
+  <rect x="180" y="500" width="320" height="48" rx="8" fill="#1a1a18" stroke="#12A884" stroke-width="2" stroke-opacity="0.6"/>
+  <text x="200" y="530" font-family="'DM Sans',system-ui,sans-serif" font-size="14" fill="#12A884">click - From SFO</text>
+  <rect x="180" y="580" width="280" height="48" rx="8" fill="#1a1a18" stroke="#12A884" stroke-width="2" stroke-opacity="0.45"/>
+  <text x="200" y="610" font-family="'DM Sans',system-ui,sans-serif" font-size="14" fill="#12A884">type - destination</text>
+  <rect x="180" y="660" width="360" height="48" rx="8" fill="#1a1a18" stroke="#12A884" stroke-width="2" stroke-opacity="0.45"/>
+  <text x="200" y="690" font-family="'DM Sans',system-ui,sans-serif" font-size="14" fill="#12A884">click - Select cheapest</text>
+
+  <rect x="1200" y="480" width="520" height="380" rx="20" fill="#0c1814" stroke="#12A884" stroke-opacity="0.35"/>
+  <text x="1232" y="530" font-family="'DM Sans',system-ui,sans-serif" font-size="11" fill="#12A884" letter-spacing="0.12em" font-weight="600">OBSERVATION LOG</text>
+  <text x="1232" y="580" font-family="ui-monospace,monospace" font-size="15" fill="#A3A39D">step 1 - navigate - flights</text>
+  <text x="1232" y="620" font-family="ui-monospace,monospace" font-size="15" fill="#A3A39D">step 2 - click - origin field</text>
+  <text x="1232" y="660" font-family="ui-monospace,monospace" font-size="15" fill="#A3A39D">step 3 - type - Austin</text>
+  <text x="1232" y="700" font-family="ui-monospace,monospace" font-size="15" fill="#A3A39D">step 4 - click - sort price</text>
+  <text x="1232" y="760" font-family="'DM Sans',system-ui,sans-serif" font-size="16" fill="#F5F2EC">embedding vector per state</text>
+  <text x="1232" y="800" font-family="'DM Sans',system-ui,sans-serif" font-size="14" fill="#7A7A74">Debounced, filtered, local only</text>
+
+  <rect x="140" y="820" width="420" height="44" rx="22" fill="#241810" stroke="#C4A484" stroke-opacity="0.3"/>
+  <text x="350" y="848" text-anchor="middle" font-family="'DM Sans',system-ui,sans-serif" font-size="14" fill="#C4A484" font-weight="600">No Start recording - it just watches</text>
+
+  <text x="1820" y="1000" text-anchor="end" font-family="'DM Sans',system-ui,sans-serif" font-size="13" fill="#5C6B5A">05 / 08</text>
+  <line x1="100" y1="1020" x2="1820" y2="1020" stroke="#ffffff" stroke-opacity="0.06"/>
+</svg>

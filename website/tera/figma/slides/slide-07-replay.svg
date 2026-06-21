@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" fill="none">
+  <rect width="1920" height="1080" fill="#090909"/>
+  <radialGradient id="g" cx="50%" cy="45%" r="65%"><stop offset="0%" stop-color="#12A884" stop-opacity="0.15"/><stop offset="100%" stop-color="#090909" stop-opacity="0"/></radialGradient>
+  <rect width="1920" height="1080" fill="url(#g)"/>
+
+  <text x="100" y="100" font-family="'DM Sans',system-ui,sans-serif" font-size="11" fill="#12A884" letter-spacing="0.14em" font-weight="600">STEP 3 · REPLAY</text>
+  <text x="100" y="200" font-family="Georgia,'Instrument Serif',serif" font-size="68" fill="#F5F2EC" letter-spacing="-0.02em">Run 2: zero tokens.</text>
+  <text x="100" y="290" font-family="'DM Sans',system-ui,sans-serif" font-size="24" fill="#A3A39D">When page state matches a known embedding, PolicyExecutor replays your workflow  no LLM call. Numbers from measured API usage.</text>
+
+  <!-- Comparison table -->
+  <rect x="100" y="360" width="1720" height="520" rx="28" fill="#141414" stroke="#ffffff" stroke-opacity="0.08"/>
+  <text x="148" y="420" font-family="'DM Sans',system-ui,sans-serif" font-size="11" fill="#7A7A74" letter-spacing="0.12em" font-weight="600">BENCHMARK · FLIGHT BOOKING WORKFLOW</text>
+
+  <!-- Header row -->
+  <text x="180" y="480" font-family="'DM Sans',system-ui,sans-serif" font-size="14" fill="#7A7A74" font-weight="600">SYSTEM</text>
+  <text x="680" y="480" font-family="'DM Sans',system-ui,sans-serif" font-size="14" fill="#7A7A74" font-weight="600">RUN 1</text>
+  <text x="980" y="480" font-family="'DM Sans',system-ui,sans-serif" font-size="14" fill="#7A7A74" font-weight="600">RUN 2</text>
+  <text x="1280" y="480" font-family="'DM Sans',system-ui,sans-serif" font-size="14" fill="#7A7A74" font-weight="600">TOKENS (RUN 2)</text>
+  <text x="1580" y="480" font-family="'DM Sans',system-ui,sans-serif" font-size="14" fill="#7A7A74" font-weight="600">TIME (RUN 2)</text>
+  <line x1="148" y1="500" x2="1772" y2="500" stroke="#ffffff" stroke-opacity="0.06"/>
+
+  <!-- Browser Use row -->
+  <rect x="148" y="520" width="1624" height="100" rx="16" fill="#1a1a18"/>
+  <text x="180" y="580" font-family="'DM Sans',system-ui,sans-serif" font-size="20" fill="#A3A39D">Browser Use</text>
+  <text x="680" y="580" font-family="'DM Sans',system-ui,sans-serif" font-size="20" fill="#A3A39D">Learn + execute</text>
+  <text x="980" y="580" font-family="'DM Sans',system-ui,sans-serif" font-size="20" fill="#A3A39D">Full re-run</text>
+  <text x="1280" y="580" font-family="Georgia,serif" font-size="32" fill="#C4A484">~15k</text>
+  <text x="1580" y="580" font-family="Georgia,serif" font-size="32" fill="#C4A484">~68s</text>
+
+  <!-- Tera row -->
+  <rect x="148" y="640" width="1624" height="120" rx="16" fill="#0c1814" stroke="#12A884" stroke-width="1.5" stroke-opacity="0.5"/>
+  <text x="180" y="710" font-family="'DM Sans',system-ui,sans-serif" font-size="22" fill="#12A884" font-weight="600">Tera · Policy replay</text>
+  <text x="680" y="710" font-family="'DM Sans',system-ui,sans-serif" font-size="20" fill="#F5F2EC">Observe once</text>
+  <text x="980" y="710" font-family="'DM Sans',system-ui,sans-serif" font-size="20" fill="#F5F2EC">MDP lookup</text>
+  <text x="1280" y="710" font-family="Georgia,serif" font-size="48" fill="#12A884">0</text>
+  <text x="1580" y="710" font-family="Georgia,serif" font-size="48" fill="#F5F2EC">~15s</text>
+
+  <!-- Metrics strip mock -->
+  <rect x="148" y="780" width="1624" height="72" rx="36" fill="#111110" stroke="#ffffff" stroke-opacity="0.06"/>
+  <text x="180" y="824" font-family="'DM Sans',system-ui,sans-serif" font-size="16" fill="#7A7A74">Live metrics · Cmd+Shift+T</text>
+  <text x="480" y="824" font-family="'DM Sans',system-ui,sans-serif" font-size="16" fill="#A3A39D">session tokens:</text>
+  <text x="620" y="824" font-family="'DM Sans',system-ui,sans-serif" font-size="16" fill="#12A884" font-weight="600">0</text>
+  <text x="720" y="824" font-family="'DM Sans',system-ui,sans-serif" font-size="16" fill="#A3A39D">tier:</text>
+  <text x="780" y="824" font-family="'DM Sans',system-ui,sans-serif" font-size="16" fill="#12A884" font-weight="600">T1</text>
+  <text x="860" y="824" font-family="'DM Sans',system-ui,sans-serif" font-size="16" fill="#A3A39D">duration:</text>
+  <text x="980" y="824" font-family="'DM Sans',system-ui,sans-serif" font-size="16" fill="#F5F2EC" font-weight="600">14.8s</text>
+
+  <text x="148" y="920" font-family="'DM Sans',system-ui,sans-serif" font-size="15" fill="#7A7A74">Run 1 token counts measured from harvest files · Browser Use baseline from published benchmarks</text>
+
+  <text x="1820" y="1000" text-anchor="end" font-family="'DM Sans',system-ui,sans-serif" font-size="13" fill="#5C6B5A">07 / 08</text>
+  <line x1="100" y1="1020" x2="1820" y2="1020" stroke="#ffffff" stroke-opacity="0.06"/>
+</svg>

@@ -1,0 +1,4 @@
+Canvas: 1920×1080 · Safe area 100px · BG #090909
+Display: Georgia / Instrument Serif · Body: DM Sans
+Accent: #C4A484 · Teal: #12A884 · Muted: #A3A39D · Soft: #7A7A74
+Card: fill #141414 · stroke rgba(255,255,255,0.09) · rx 24

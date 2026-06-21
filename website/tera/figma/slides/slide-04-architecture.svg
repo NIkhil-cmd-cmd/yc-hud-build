@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" fill="none">
+  <rect width="1920" height="1080" fill="#090909"/>
+
+  <text x="100" y="100" font-family="'DM Sans',system-ui,sans-serif" font-size="11" fill="#C4A484" letter-spacing="0.14em" font-weight="600">ARCHITECTURE</text>
+  <text x="100" y="200" font-family="Georgia,'Instrument Serif',serif" font-size="68" fill="#F5F2EC" letter-spacing="-0.02em">
+    <tspan x="100" dy="0">One browser. Not Chrome</tspan>
+    <tspan x="100" dy="78">plus your app.</tspan>
+  </text>
+  <text x="100" y="400" font-family="'DM Sans',system-ui,sans-serif" font-size="24" fill="#A3A39D">Tera runs agents inside native WKWebView  the same tab you browse in. No external Playwright window.</text>
+
+  <!-- Tera stack (left) -->
+  <rect x="100" y="480" width="820" height="460" rx="28" fill="#0c1814" stroke="#12A884" stroke-opacity="0.4"/>
+  <text x="148" y="540" font-family="'DM Sans',system-ui,sans-serif" font-size="11" fill="#12A884" letter-spacing="0.12em" font-weight="600">TERA · NATIVE STACK</text>
+
+  <rect x="148" y="580" width="724" height="72" rx="14" fill="#141414" stroke="#ffffff" stroke-opacity="0.08"/>
+  <text x="180" y="624" font-family="'DM Sans',system-ui,sans-serif" font-size="18" fill="#F5F2EC" font-weight="600">SwiftUI · AgentHomeView · AgentNotch</text>
+  <path d="M510 660v28" stroke="#12A884" stroke-width="2" stroke-opacity="0.5"/>
+  <rect x="148" y="688" width="724" height="72" rx="14" fill="#141414" stroke="#12A884" stroke-opacity="0.25"/>
+  <text x="180" y="732" font-family="'DM Sans',system-ui,sans-serif" font-size="18" fill="#F5F2EC" font-weight="600">WKWebView · WebViewAutomation · OpenHiveObservation</text>
+  <path d="M510 768v28" stroke="#12A884" stroke-width="2" stroke-opacity="0.5"/>
+  <rect x="148" y="796" width="724" height="72" rx="14" fill="#141414" stroke="#ffffff" stroke-opacity="0.08"/>
+  <text x="180" y="840" font-family="'DM Sans',system-ui,sans-serif" font-size="18" fill="#F5F2EC" font-weight="600">WebSocket ’ Python engine · embeddings · MDP</text>
+  <text x="148" y="910" font-family="'DM Sans',system-ui,sans-serif" font-size="16" fill="#12A884"> Single process · single window · measured tokens</text>
+
+  <!-- External stack (right) -->
+  <rect x="1000" y="480" width="820" height="460" rx="28" fill="#141414" stroke="#ffffff" stroke-opacity="0.08"/>
+  <text x="1048" y="540" font-family="'DM Sans',system-ui,sans-serif" font-size="11" fill="#7A7A74" letter-spacing="0.12em" font-weight="600">BROWSER USE · EXTERNAL</text>
+
+  <rect x="1048" y="580" width="724" height="72" rx="14" fill="#1a1a18" stroke="#ffffff" stroke-opacity="0.06"/>
+  <text x="1080" y="624" font-family="'DM Sans',system-ui,sans-serif" font-size="18" fill="#A3A39D">Your app / orchestrator</text>
+  <path d="M1410 660v28" stroke="#7A7A74" stroke-width="2" stroke-dasharray="5 5"/>
+  <rect x="1048" y="688" width="724" height="72" rx="14" fill="#241810" stroke="#C4A484" stroke-opacity="0.2"/>
+  <text x="1080" y="732" font-family="'DM Sans',system-ui,sans-serif" font-size="18" fill="#C4A484">Headless Chromium via Playwright</text>
+  <path d="M1410 768v28" stroke="#7A7A74" stroke-width="2" stroke-dasharray="5 5"/>
+  <rect x="1048" y="796" width="724" height="72" rx="14" fill="#1a1a18" stroke="#ffffff" stroke-opacity="0.06"/>
+  <text x="1080" y="840" font-family="'DM Sans',system-ui,sans-serif" font-size="18" fill="#A3A39D">LLM loop · ~15k tokens per run</text>
+  <text x="1048" y="910" font-family="'DM Sans',system-ui,sans-serif" font-size="16" fill="#7A7A74"> Separate browser · no passive learning · no policy replay</text>
+
+  <text x="1820" y="1000" text-anchor="end" font-family="'DM Sans',system-ui,sans-serif" font-size="13" fill="#5C6B5A">04 / 08</text>
+  <line x1="100" y1="1020" x2="1820" y2="1020" stroke="#ffffff" stroke-opacity="0.06"/>
+</svg>
