@@ -1,0 +1,121 @@
+//
+//  FindManager.swift
+//  Nook
+//
+//  Created by Assistant on 28/12/2024.
+//
+
+import Foundation
+import SwiftUI
+
+@MainActor
+class FindManager: ObservableObject {
+    @Published var isFindBarVisible: Bool = false
+    @Published var searchText: String = ""
+    @Published var matchCount: Int = 0
+    @Published var currentMatchIndex: Int = 0
+    @Published var isSearching: Bool = false
+    
+    var currentTab: Tab?
+    
+    func showFindBar(for tab: Tab? = nil) {
+        currentTab = tab
+        isFindBarVisible = true
+        searchText = ""
+        matchCount = 0
+        currentMatchIndex = 0
+    }
+
+    func hideFindBar() {
+        // Clear highlights from current tab before hiding
+        if let tab = currentTab {
+            tab.clearFindInPage()
+        }
+
+        isFindBarVisible = false
+        // Delay clearing text until animation completes (0.25s)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            self?.searchText = ""
+            self?.matchCount = 0
+            self?.currentMatchIndex = 0
+            self?.currentTab = nil
+        }
+    }
+    
+    func search(for text: String, in tab: Tab?) {
+        guard let tab = tab else {
+            clearSearch()
+            return
+        }
+
+        currentTab = tab
+        searchText = text
+        isSearching = true
+
+        if text.isEmpty {
+            clearSearch()
+            return
+        }
+
+        // Use JavaScript-based find functionality
+        tab.findInPage(text) { [weak self] result in
+            DispatchQueue.main.async {
+                self?.isSearching = false
+                switch result {
+                case .success(let (matchCount, currentIndex)):
+                    self?.matchCount = matchCount
+                    self?.currentMatchIndex = currentIndex
+                case .failure:
+                    self?.matchCount = 0
+                    self?.currentMatchIndex = 0
+                }
+            }
+        }
+    }
+
+    func findNext() {
+        guard let tab = currentTab, !searchText.isEmpty else { return }
+        tab.findNextInPage { [weak self] result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let (matchCount, currentIndex)):
+                    self?.matchCount = matchCount
+                    self?.currentMatchIndex = currentIndex
+                case .failure:
+                    break
+                }
+            }
+        }
+    }
+
+    func findPrevious() {
+        guard let tab = currentTab, !searchText.isEmpty else { return }
+        tab.findPreviousInPage { [weak self] result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let (matchCount, currentIndex)):
+                    self?.matchCount = matchCount
+                    self?.currentMatchIndex = currentIndex
+                case .failure:
+                    break
+                }
+            }
+        }
+    }
+    
+    func clearSearch() {
+        guard let tab = currentTab else { return }
+        tab.clearFindInPage()
+        searchText = ""
+        matchCount = 0
+        currentMatchIndex = 0
+    }
+    
+    func updateCurrentTab(_ tab: Tab?) {
+        currentTab = tab
+        if isFindBarVisible && !searchText.isEmpty {
+            // Re-search in the new tab
+            search(for: searchText, in: tab)
+        }
+    }
+}

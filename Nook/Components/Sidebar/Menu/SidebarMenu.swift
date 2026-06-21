@@ -1,0 +1,115 @@
+//
+//  SidebarMenu.swift
+//  Nook
+//
+//  Created by Maciek Bagiński on 23/09/2025.
+//
+
+import SwiftUI
+
+enum Tabs {
+    case history
+    case downloads
+}
+
+public enum SidebarPosition: String, CaseIterable, Identifiable {
+    case left
+    case right
+    public var id: String { rawValue }
+    
+    var displayName: String {
+        switch self {
+        case .left: return "Left"
+        case .right: return "Right"
+        }
+    }
+    
+    var icon: String {
+        switch self {
+        case .left: return "sidebar.left"
+        case .right: return "sidebar.right"
+        }
+    }
+}
+
+struct SidebarMenu: View {
+    @Environment(BrowserWindowState.self) private var windowState
+    @EnvironmentObject var browserManager: BrowserManager
+    @Environment(\.nookSettings) var nookSettings
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 0) {
+            if nookSettings.sidebarPosition == .left {
+                tabs
+                content
+            } else {
+                content
+                tabs
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .ignoresSafeArea()
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        VStack {
+            switch windowState.sidebarMenuSelectedTab {
+            case .history:
+                SidebarMenuHistoryTab()
+            case .downloads:
+                SidebarMenuDownloadsTab()
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    var tabs: some View{
+        VStack {
+
+            Spacer()
+            VStack(spacing: 20) {
+                SidebarMenuTab(
+                    image: "clock",
+                    activeImage: "clock.fill",
+                    title: "History",
+                    isActive: windowState.sidebarMenuSelectedTab == .history,
+                    action: {
+                        windowState.sidebarMenuSelectedTab = .history
+                    }
+                )
+                SidebarMenuTab(
+                    image: "arrow.down.circle",
+                    activeImage: "arrow.down.circle.fill",
+                    title: "Downloads",
+                    isActive: windowState.sidebarMenuSelectedTab == .downloads,
+                    action: {
+                        windowState.sidebarMenuSelectedTab = .downloads
+                    }
+                )
+            }
+            
+            Spacer()
+            HStack {
+                Button("Back", systemImage: "arrow.backward") {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        windowState.isSidebarMenuVisible = false
+                        let restoredWidth = windowState.savedSidebarWidth
+                        windowState.sidebarWidth = restoredWidth
+                        windowState.sidebarContentWidth = max(restoredWidth - 16, 0)
+                    }
+                }
+                .labelStyle(.iconOnly)
+                .buttonStyle(NavButtonStyle())
+                .foregroundStyle(Color.primary)
+                Spacer()
+            }
+            .padding(.leading, 8)
+            .padding(.bottom, 8)
+        }
+        .padding(8)
+        .frame(width: 110)
+        .frame(maxHeight: .infinity)
+        .background(.black.opacity(0.2))
+    }
+}
