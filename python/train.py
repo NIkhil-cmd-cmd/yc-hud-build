@@ -99,10 +99,16 @@ def compile_workflow_from_buffer(name: str, buffer: list[dict]) -> dict[str, Any
     G = build_graph([{"harvest": buffer, "success": True}])
     policy = value_iteration(G)
     wid = f"wf_{int(time.time())}"
+    nodes = {}
+    for n in G.nodes():
+        node = dict(G.nodes[n])
+        if "emb" not in node and buffer:
+            node["emb"] = node.get("state_emb") or (buffer[0].get("state_emb") if buffer else [])
+        nodes[str(n)] = node
     return {
         "id": wid,
         "name": name,
         "policy": policy,
-        "nodes": {str(n): dict(G.nodes[n]) for n in G.nodes()},
+        "nodes": nodes,
         "steps": len(buffer),
     }

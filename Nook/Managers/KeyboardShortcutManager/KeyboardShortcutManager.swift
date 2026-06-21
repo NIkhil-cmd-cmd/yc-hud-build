@@ -538,6 +538,10 @@ class KeyboardShortcutManager {
                 browserManager.showBoostsDialog()
             case .organizeTabs:
                 NotificationCenter.default.post(name: .organizeTabsRequested, object: nil)
+            case .saveWorkflow:
+                WorkflowManager.shared.saveCurrentSession(name: "Saved workflow")
+            case .showTokensPanel:
+                NotificationCenter.default.post(name: .openHiveShowTokens, object: nil)
             }
 
         }
@@ -571,4 +575,5 @@ class KeyboardShortcutManager {
 // MARK: - Notification
 extension Notification.Name {
     static let organizeTabsRequested = Notification.Name("organizeTabsRequested")
+    static let openHiveShowTokens = Notification.Name("openHiveShowTokens")
 }

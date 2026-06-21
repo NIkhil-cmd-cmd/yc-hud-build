@@ -107,7 +107,11 @@ struct SidebarAIChat: View {
             headerView
         })
         .safeAreaInset(edge: .bottom) {
-            inputAreaView
+            VStack(spacing: 0) {
+                OpenHivePanelView()
+                    .environmentObject(browserManager)
+                inputAreaView
+            }
         }
         .safeAreaPadding(.top, 8)
         .safeAreaPadding(.bottom, 8)
@@ -410,8 +414,13 @@ struct SidebarAIChat: View {
     // MARK: - Actions
 
     private func sendMessage() {
-        guard !messageText.isEmpty, aiService.hasApiKey else { return }
+        guard !messageText.isEmpty else { return }
         let text = messageText
+        if WorkflowManager.shared.handleChatCommand(text) {
+            messageText = ""
+            return
+        }
+        guard aiService.hasApiKey else { return }
         messageText = ""
         Task {
             await aiService.sendMessage(text, windowState: windowState)

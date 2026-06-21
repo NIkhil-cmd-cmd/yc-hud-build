@@ -59,6 +59,7 @@ struct NookApp: App {
                     .onAppear {
                         setupApplicationLifecycle()
                         setupAIServices()
+                        EngineBridge.shared.connect()
                     }
                 
                 

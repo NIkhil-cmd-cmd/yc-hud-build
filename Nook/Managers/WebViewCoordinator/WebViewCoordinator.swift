@@ -174,6 +174,7 @@ class WebViewCoordinator {
         newWebView.configuration.userContentController.add(tab, name: "mediaStateChange_\(tabId.uuidString)")
         newWebView.configuration.userContentController.add(tab, name: "backgroundColor_\(tabId.uuidString)")
         newWebView.configuration.userContentController.add(tab, name: "historyStateDidChange")
+        newWebView.configuration.userContentController.add(tab, name: "openhiveObserve")
         newWebView.configuration.userContentController.add(tab, name: "NookIdentity")
         newWebView.configuration.userContentController.add(tab, name: "nookShortcutDetect")
         
@@ -305,6 +306,7 @@ class WebViewCoordinator {
         newWebView.configuration.userContentController.add(tab, name: "mediaStateChange_\(tabId.uuidString)")
         newWebView.configuration.userContentController.add(tab, name: "backgroundColor_\(tabId.uuidString)")
         newWebView.configuration.userContentController.add(tab, name: "historyStateDidChange")
+        newWebView.configuration.userContentController.add(tab, name: "openhiveObserve")
         newWebView.configuration.userContentController.add(tab, name: "NookIdentity")
 
         tab.setupThemeColorObserver(for: newWebView)

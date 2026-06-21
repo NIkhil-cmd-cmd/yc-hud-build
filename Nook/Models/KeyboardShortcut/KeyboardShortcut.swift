@@ -91,6 +91,8 @@ enum ShortcutAction: String, CaseIterable, Hashable, Codable {
     case customizeSpaceGradient = "customize_space_gradient"   // Cmd+Shift+G
     case createBoost = "create_boost"                          // Cmd+Shift+B
     case organizeTabs = "organize_tabs"                        // Cmd+Shift+Option+O
+    case saveWorkflow = "save_workflow"                        // Cmd+Shift+S
+    case showTokensPanel = "show_tokens_panel"                 // Cmd+Shift+T
 
     var displayName: String {
         switch self {
@@ -140,6 +142,8 @@ enum ShortcutAction: String, CaseIterable, Hashable, Codable {
         case .customizeSpaceGradient: return "Customize Space Gradient"
         case .createBoost: return "Create Boost"
         case .organizeTabs: return "Organize Tabs"
+        case .saveWorkflow: return "Save Workflow"
+        case .showTokensPanel: return "Show Tokens Dashboard"
         }
     }
 
@@ -178,6 +182,8 @@ enum ShortcutAction: String, CaseIterable, Hashable, Codable {
         case .createBoost:
             return .tools
         case .organizeTabs:
+            return .tools
+        case .saveWorkflow, .showTokensPanel:
             return .tools
         }
     }
@@ -358,7 +364,9 @@ extension KeyboardShortcut {
             KeyboardShortcut(action: .installExtension, keyCombination: KeyCombination(key: "e", modifiers: [.command, .shift])),
             KeyboardShortcut(action: .customizeSpaceGradient, keyCombination: KeyCombination(key: "g", modifiers: [.command, .shift])),
             KeyboardShortcut(action: .createBoost, keyCombination: KeyCombination(key: "b", modifiers: [.command, .shift])),
-            KeyboardShortcut(action: .organizeTabs, keyCombination: KeyCombination(key: "o", modifiers: [.command, .shift, .option]))
+            KeyboardShortcut(action: .organizeTabs, keyCombination: KeyCombination(key: "o", modifiers: [.command, .shift, .option])),
+            KeyboardShortcut(action: .saveWorkflow, keyCombination: KeyCombination(key: "s", modifiers: [.command, .shift])),
+            KeyboardShortcut(action: .showTokensPanel, keyCombination: KeyCombination(key: "t", modifiers: [.command, .shift]))
         ]
     }
 }

@@ -688,6 +688,7 @@ public class Tab: NSObject, Identifiable, ObservableObject, WKDownloadDelegate {
             _webView?.configuration.userContentController.add(
                 self, name: "backgroundColor_\(id.uuidString)")
             _webView?.configuration.userContentController.add(self, name: "historyStateDidChange")
+            _webView?.configuration.userContentController.add(self, name: "openhiveObserve")
             _webView?.configuration.userContentController.add(self, name: "NookIdentity")
             _webView?.configuration.userContentController.add(self, name: "nookShortcutDetect")
             _webView?.configuration.userContentController.add(self, name: "nookAdBlocker")
@@ -2711,6 +2712,7 @@ extension Tab: WKNavigationDelegate {
         injectMediaDetection(to: webView)
         injectHistoryStateObserver(into: webView)
         injectShortcutDetection(to: webView)
+        OpenHiveObservation.inject(into: webView)
         updateNavigationStateEnhanced(source: "didCommit")
 
         // Trigger background color extraction after page fully loads
@@ -3056,7 +3058,6 @@ extension Tab: WKScriptMessageHandler {
             if let href = message.body as? String, let url = URL(string: href) {
                 if self.url.absoluteString != url.absoluteString {
                     self.url = url
-                    // NOTE: Do NOT call syncTabAcrossWindows here. SPA navigations
                     // (pushState/replaceState/popstate) happen inside the webview — the
                     // content is already at the correct state. Calling syncTab would see a
                     // URL mismatch (webView.url lags behind the JS-driven URL change) and
@@ -3084,6 +3085,23 @@ extension Tab: WKScriptMessageHandler {
                         self?.browserManager?.tabManager.persistSnapshot()
                     }
                 }
+            }
+
+        case "openhiveObserve":
+            Task { @MainActor in
+                var payload: [String: Any] = [:]
+                if let dict = message.body as? [String: Any] {
+                    payload = dict
+                } else if let str = message.body as? String {
+                    payload = ["type": "click", "text": str]
+                }
+                if let webView = message.webView {
+                    payload["url"] = webView.url?.absoluteString ?? payload["url"] ?? ""
+                    payload["title"] = webView.title ?? ""
+                    let tree = await OpenHiveObservation.accessibilitySnapshot(from: webView)
+                    if let tree { payload["accessibilityTree"] = tree }
+                }
+                EngineBridge.shared.observeEvent(payload)
             }
 
         case "NookIdentity":
@@ -3396,6 +3414,7 @@ extension Tab: WKUIDelegate {
         newWebView.configuration.userContentController.add(
             newTab, name: "backgroundColor_\(newTab.id.uuidString)")
         newWebView.configuration.userContentController.add(newTab, name: "historyStateDidChange")
+        newWebView.configuration.userContentController.add(newTab, name: "openhiveObserve")
         newWebView.configuration.userContentController.add(newTab, name: "NookIdentity")
         newWebView.configuration.userContentController.add(newTab, name: "nookAdBlocker")
 
@@ -3441,6 +3460,7 @@ extension Tab: WKUIDelegate {
         userContentController.add(tab, name: "mediaStateChange_\(tab.id.uuidString)")
         userContentController.add(tab, name: "backgroundColor_\(tab.id.uuidString)")
         userContentController.add(tab, name: "historyStateDidChange")
+        userContentController.add(tab, name: "openhiveObserve")
         userContentController.add(tab, name: "NookIdentity")
         userContentController.add(tab, name: "nookAdBlocker")
     }

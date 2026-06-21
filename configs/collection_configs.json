@@ -1,0 +1,7 @@
+[
+  {"origin": "BOS", "destination": "LAX", "date": "2026-07-15"},
+  {"origin": "SFO", "destination": "JFK", "date": "2026-07-20"},
+  {"origin": "SEA", "destination": "MIA", "date": "2026-08-01"},
+  {"origin": "ORD", "destination": "DEN", "date": "2026-07-12"},
+  {"origin": "ATL", "destination": "SEA", "date": "2026-07-18"}
+]

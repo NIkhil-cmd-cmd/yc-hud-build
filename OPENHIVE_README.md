@@ -1,63 +1,39 @@
-# OpenHive Browser
+# OpenHive — HUD Frontier Hackathon
 
-Native macOS browser that learns from you. Forked from [Nook](https://github.com/nook-browser/Nook) (GPL-3.0) with a Python policy engine for passive workflow learning and zero-token replay.
+**Tagline:** The agent thought once. Now it never has to again.
 
-**Hackathon:** HUD Frontier · OpenHive v2
-
-## Architecture
-
-- **Swift UI:** Nook fork — sidebar-first browser, Liquid Glass (macOS 26 Tahoe)
-- **Python engine:** `python/engine.py` — observation, MDP training, execution, token metrics
-- **Bridge:** WebSocket on `localhost:8765`
+OpenHive is a native macOS browser (Nook fork) that passively learns workflows from your browsing, compiles them into embedding-based Markov policies, and replays tasks with zero LLM tokens on Tier 1 execution.
 
 ## Quick start
 
-### 1. Python engine
+### 1. Python engine (required)
 
 ```bash
-cd python
-python3 -m venv ../.venv
-source ../.venv/bin/activate
-pip install -e ..  # or: pip install websockets openai networkx pydantic
-cp ../.env.example ../.env   # fill in API keys
-python engine.py
+cd /Users/nikhilkrishnaswamy/yc
+source .venv/bin/activate
+pip install websockets openai networkx pydantic
+cp .env.example .env   # optional API keys
+cd python && python engine.py
 ```
 
-### 2. Nook / OpenHive app
+### 2. Xcode
 
 ```bash
 open Nook.xcodeproj
 ```
 
-Set your Development Team in Signing. Build and run (macOS 15.5+; macOS 26 for full Liquid Glass).
+Build and run. On launch, the app connects to `ws://localhost:8765`.
 
-**Note:** Add new Swift files to the Xcode target if not already included:
-- `Nook/Managers/EngineBridge/EngineBridge.swift`
-- `Nook/Managers/TokenDashboardManager/TokenDashboardManager.swift`
-- `Nook/Components/TokensPanel/TokensPanelView.swift`
+## Usage
 
-On launch, `EngineBridge.shared.connect()` should be wired from app init (TODO).
+1. Browse normally — actions are captured silently
+2. In AI sidebar chat: `save this as book cheapest flight` (or `Cmd+Shift+S`)
+3. Click **Run** on a saved workflow in the OpenHive panel
+4. `Cmd+Shift+T` — tokens dashboard
 
-### 3. Passive learning flow
+## Architecture
 
-1. Browse normally — engine captures actions silently
-2. Sidebar chat: "save this as book flight" — compiles workflow locally
-3. Run workflow — 0 tokens when policy matches (T1)
+- **Swift:** Nook fork + EngineBridge + OpenHivePanelView
+- **Python:** engine.py, observer, train, executor, hud_env, exa_client, datagen
 
-## Docs
-
-- [BUILD_PLAN.md](docs/BUILD_PLAN.md) — full technical plan
-- [NOTICES.md](NOTICES.md) — third-party licenses (Nook GPL-3.0)
-
-## Local data
-
-```
-~/Library/Application Support/OpenHive/
-├── harvest/      # session step logs
-├── workflows/    # compiled policies
-└── metrics/      # tokens.json, run logs
-```
-
-## License
-
-OpenHive engine and additions: GPL-3.0 (same as Nook base). See [LICENSE](LICENSE) and [NOTICES.md](NOTICES.md).
+See [docs/BUILD_PLAN.md](docs/BUILD_PLAN.md).

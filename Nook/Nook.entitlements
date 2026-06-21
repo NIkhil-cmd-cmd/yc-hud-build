@@ -6,8 +6,6 @@
 	<string>development</string>
 	<key>com.apple.developer.authentication-services.autofill-credential-provider</key>
 	<true/>
-	<key>com.apple.developer.web-browser.public-key-credential</key>
-	<true/>
 	<key>com.apple.security.automation.apple-events</key>
 	<true/>
 	<key>com.apple.security.device.bluetooth</key>
