@@ -389,9 +389,13 @@ def ask_action(
 
 def validate_action(action: dict[str, Any], candidates: list[dict[str, Any]]) -> None:
     refs = {candidate["ref"] for candidate in candidates}
-    if action.get("action") not in {"click", "click_date", "next_month", "type", "press", "done"}:
+    if action.get("action") not in {"click", "click_date", "next_month", "click_xy", "type", "press", "done"}:
         raise ValueError(f"Invalid action type: {action.get('action')!r}")
     if action.get("action") in {"press", "done"}:
+        return
+    if action.get("action") == "click_xy":
+        if not isinstance(action.get("x"), (int, float)) or not isinstance(action.get("y"), (int, float)):
+            raise ValueError("click_xy requires numeric x/y")
         return
     if action.get("ref") not in refs:
         raise ValueError(f"Invalid action ref: {action.get('ref')!r}")
@@ -408,6 +412,17 @@ async def click_or_type(page: Page, candidates: list[dict[str, Any]], action: di
             "role": "keyboard",
             "text": str(action.get("value") or "Enter"),
             "bbox": {"x": 0, "y": 0, "width": 1, "height": 1},
+        }
+    if action.get("action") == "click_xy":
+        x = float(action["x"])
+        y = float(action["y"])
+        await page.mouse.click(x, y)
+        await page.wait_for_timeout(1500)
+        return {
+            "ref": None,
+            "role": "coordinate",
+            "text": str(action.get("value") or "coordinate click"),
+            "bbox": {"x": x - 1, "y": y - 1, "width": 2, "height": 2},
         }
     selected = next((c for c in candidates if c["ref"] == action.get("ref")), candidates[0])
     bbox = selected["bbox"]
@@ -466,7 +481,13 @@ async def capture_step(
         "title": state_summary["title"],
         "stateText": state_text,
         "stateEmbedding": embed(openai, state_text),
-        "action": {"type": action.get("action"), "ref": action.get("ref"), "value": action.get("value")},
+        "action": {
+            "type": action.get("action"),
+            "ref": action.get("ref"),
+            "value": action.get("value"),
+            "x": action.get("x"),
+            "y": action.get("y"),
+        },
         "selectedElement": selected,
         "elementEmbedding": embed(openai, json.dumps(selected, sort_keys=True)),
         "nextStateText": next_state_text,
