@@ -1,0 +1,7 @@
+websockets
+openai
+networkx
+pydantic
+exa-py
+hud-python>=0.6.6
+playwright

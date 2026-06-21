@@ -1,0 +1,178 @@
+//
+//  SpacesList.swift
+//  Nook
+//
+//  Created by Maciek Bagiński on 04/08/2025.
+//  Refactored by Aether on 15/11/2025.
+//
+
+import SwiftUI
+
+struct SpacesList: View {
+    @EnvironmentObject var browserManager: BrowserManager
+    @EnvironmentObject var tabManager: TabManager
+    @Environment(BrowserWindowState.self) private var windowState
+    @State private var availableWidth: CGFloat = 0
+    @State private var hoveredSpaceId: UUID?
+    @State private var showPreview: Bool = false
+    @State private var isHoveringList: Bool = false
+
+    private var layoutMode: SpacesListLayoutMode {
+        let spaces = windowState.isIncognito
+            ? windowState.ephemeralSpaces
+            : tabManager.spaces
+        return SpacesListLayoutMode.determine(
+            spacesCount: spaces.count,
+            availableWidth: availableWidth
+        )
+    }
+
+    private var visibleSpaces: [Space] {
+        if windowState.isIncognito {
+            return windowState.ephemeralSpaces
+        }
+        return tabManager.spaces
+    }
+
+    var body: some View {
+        Color.clear
+            .onGeometryChange(for: CGFloat.self) { proxy in
+                proxy.size.width
+            } action: { newWidth in
+                availableWidth = newWidth
+            }
+            .overlay {
+                HStack(spacing: 0) {
+                    ForEach(Array(visibleSpaces.enumerated()), id: \.element.id) { index, space in
+                        SpacesListItem(
+                            space: space,
+                            isActive: windowState.currentSpaceId == space.id,
+                            compact: layoutMode == .compact,
+                            isFaded: false,
+                            onHoverChange: { isHovering in
+                                handleHoverChange(isHovering, for: space)
+                            }
+                        )
+                        .environmentObject(browserManager)
+                        .environment(windowState)
+                        .id(space.id)
+                        .transition(.asymmetric(
+                            insertion: .scale.combined(with: .opacity),
+                            removal: .scale.combined(with: .opacity)
+                        ))
+
+                        if index != visibleSpaces.count - 1 {
+                            Spacer()
+                                .frame(minWidth: 1, maxWidth: 8)
+                                .layoutPriority(-1)
+                        }
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .background {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(.ultraThinMaterial)
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(.white.opacity(0.08), lineWidth: 1)
+                }
+                .onHoverTracking { hovering in
+                    isHoveringList = hovering
+                    if !hovering {
+                        hideHoverPreview()
+                    }
+                }
+                .overlay(alignment: .top) {
+                    if showPreview,
+                       let hoveredId = hoveredSpaceId,
+                       hoveredId != windowState.currentSpaceId,
+                       let hoveredSpace = visibleSpaces.first(where: { $0.id == hoveredId }) {
+                        Text(hoveredSpace.name)
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(previewTextColor)
+                            .lineLimit(1)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background {
+                                Capsule(style: .continuous)
+                                    .fill(.ultraThinMaterial)
+                            }
+                            .overlay {
+                                Capsule(style: .continuous)
+                                    .strokeBorder(.white.opacity(0.08), lineWidth: 1)
+                            }
+                            .transition(.scale.combined(with: .opacity))
+                            .offset(y: -20)
+                    }
+                }
+            }
+            .animation(.easeInOut(duration: 0.25), value: visibleSpaces.count)
+    }
+
+    private var previewTextColor: Color {
+        browserManager.gradientColorManager.isDark
+            ? AppColors.spaceTabTextDark
+            : AppColors.spaceTabTextLight
+    }
+
+    private func handleHoverChange(_ isHovering: Bool, for space: Space) {
+        if isHovering {
+            hoveredSpaceId = space.id
+            scheduleHoverPreview(for: space.id)
+        } else if hoveredSpaceId == space.id {
+            hideHoverPreview()
+        }
+    }
+
+    private func scheduleHoverPreview(for spaceId: UUID) {
+        showPreview = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
+            guard hoveredSpaceId == spaceId, isHoveringList else { return }
+            withAnimation(.easeInOut(duration: 0.2)) {
+                showPreview = true
+            }
+        }
+    }
+
+    private func hideHoverPreview() {
+        showPreview = false
+        hoveredSpaceId = nil
+    }
+
+}
+
+// MARK: - Layout Mode
+
+enum SpacesListLayoutMode {
+    case normal    // Full icons with spacing
+    case compact   // Dots for inactive, icons for active
+
+    static func determine(spacesCount: Int, availableWidth: CGFloat) -> Self {
+        guard spacesCount > 0 else { return .normal }
+
+        // Measurements for NavButtonStyle button with default .regular control size
+        let buttonSize: CGFloat = 32.0  // NavButtonStyle .regular = 32pt
+        let minSpacing: CGFloat = 4.0
+
+        // Normal mode: all icons visible with minimum spacing
+        let normalMinWidth = (CGFloat(spacesCount) * buttonSize) + (CGFloat(spacesCount - 1) * minSpacing)
+
+        // Compact mode: 1 active icon + (n-1) dots with minimum spacing
+        let dotSize: CGFloat = 6.0
+        let totalDots = spacesCount - 1
+        let compactMinWidth = buttonSize + (CGFloat(totalDots) * dotSize) + (CGFloat(totalDots) * minSpacing)
+
+        // Choose mode: switch to compact only when normal mode would be too cramped
+        // Stay in normal as long as we have at least minimum spacing
+        if availableWidth >= normalMinWidth {
+            return .normal
+        } else if availableWidth >= compactMinWidth {
+            return .compact
+        } else {
+            // Even compact doesn't fit perfectly, but use compact anyway
+            return .compact
+        }
+    }
+}
