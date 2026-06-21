@@ -90,8 +90,11 @@ class AIService {
 
     // MARK: - Send Message
 
-    func sendMessage(_ text: String, windowState: BrowserWindowState) async {
-        guard !text.isEmpty, hasApiKey else { return }
+    func sendMessage(_ text: String, windowState: BrowserWindowState, ultraplanEnabled: Bool = false) async {
+        guard !text.isEmpty else { return }
+        if !ultraplanEnabled {
+            guard hasApiKey else { return }
+        }
 
         // Wire the current window state to the tool executor so browser tools know which window to act on
         browserToolExecutor?.windowState = windowState
@@ -100,6 +103,36 @@ class AIService {
         messages.append(userMessage)
         isLoading = true
         streamingText = ""
+
+        if ultraplanEnabled {
+            defer {
+                isLoading = false
+                streamingText = ""
+            }
+            guard let browserManager,
+                  let currentTab = browserManager.currentTab(for: windowState),
+                  let webView = browserManager.getWebView(for: currentTab.id, in: windowState.id) else {
+                messages.append(ChatMessage(
+                    role: .assistant,
+                    content: "I need an active tab before I can run an ultraplan.",
+                    timestamp: Date()
+                ))
+                return
+            }
+            EngineBridge.shared.startUltraplanTask(
+                goal: text,
+                webView: webView,
+                tabId: currentTab.id,
+                windowId: windowState.id,
+                browserManager: browserManager
+            )
+            messages.append(ChatMessage(
+                role: .assistant,
+                content: "Starting ultraplan. I'll break this into subtasks, use trained workflows where they match, and stop before purchase or reservation confirmation.",
+                timestamp: Date()
+            ))
+            return
+        }
 
         do {
             // Extract page context

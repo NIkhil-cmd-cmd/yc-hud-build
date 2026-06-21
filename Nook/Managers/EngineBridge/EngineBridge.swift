@@ -70,6 +70,7 @@ final class EngineBridge {
         var id: String
         var name: String
         var steps: Int
+        var metadata: [String: [String]]?
     }
 
     private init() {}
@@ -323,6 +324,37 @@ final class EngineBridge {
         )
     }
 
+    func startUltraplanTask(
+        goal: String,
+        webView: WKWebView,
+        tabId: UUID,
+        windowId: UUID,
+        browserManager: BrowserManager
+    ) {
+        guard !isExecuting else {
+            trajectoryLastError = "Cancel the running agent first"
+            return
+        }
+        executeWebView = webView
+        executeTabId = tabId
+        executeWindowId = windowId
+        executeBrowserManager = browserManager
+        trajectoryStepLog.removeAll()
+        trajectoryLastError = nil
+        currentTrajectoryTask = nil
+        sendBrowserUsePayload(
+            type: "start_ultraplan",
+            webView: webView,
+            extra: [
+                "goal": goal,
+                "task": ["goal": goal],
+                "maxSubtasks": 8,
+                "maxStepsPerSubtask": 40,
+                "safety": ["stopBeforePurchase": true],
+            ]
+        )
+    }
+
     func exaSearch(query: String, timeoutSeconds: TimeInterval = 10, completion: @escaping (Result<String, Error>) -> Void) {
         guard isConnected else {
             completion(.failure(NSError(domain: "OpenHive", code: URLError.notConnectedToInternet.rawValue, userInfo: [NSLocalizedDescriptionKey: "Engine not connected"])))
@@ -487,7 +519,12 @@ final class EngineBridge {
             if let raw = json["workflows"] as? [[String: Any]] {
                 workflows = raw.compactMap { w in
                     guard let id = w["id"] as? String, let name = w["name"] as? String else { return nil }
-                    return WorkflowSummary(id: id, name: name, steps: w["steps"] as? Int ?? 0)
+                    return WorkflowSummary(
+                        id: id,
+                        name: name,
+                        steps: w["steps"] as? Int ?? 0,
+                        metadata: w["metadata"] as? [String: [String]]
+                    )
                 }
             }
         case "workflow_saved":
@@ -636,6 +673,37 @@ final class EngineBridge {
                     url: stepURL.isEmpty ? (resolveExecuteWebView()?.url?.absoluteString ?? "") : stepURL
                 )
             )
+        case "ultraplan_started":
+            isExecuting = true
+            let summary = json["summary"] as? String ?? "Ultraplan"
+            executionProgress = "Planning: \(summary)"
+            lastActionDescription = nil
+            AgentExecutionState.shared.begin(label: "Ultraplan", tier: 1)
+        case "ultraplan_subtask_started":
+            if let subtask = json["subtask"] as? [String: Any] {
+                let title = subtask["title"] as? String ?? "Subtask"
+                let index = json["index"] as? Int ?? 0
+                let total = json["total"] as? Int ?? 0
+                executionProgress = total > 0 ? "Ultraplan \(index)/\(total): \(title)" : "Ultraplan: \(title)"
+                lastActionDescription = title
+                AgentExecutionState.shared.update(label: title, tier: 1)
+            }
+        case "ultraplan_subtask_done":
+            if let subtask = json["subtask"] as? [String: Any] {
+                executionProgress = "Done: \(subtask["title"] as? String ?? "Subtask")"
+            }
+        case "ultraplan_input_required":
+            let question = json["question"] as? String ?? "Ultraplan needs more information."
+            trajectoryLastError = question
+            WorkflowManager.postToast(question, isError: true)
+        case "ultraplan_safety_stop":
+            let message = json["message"] as? String ?? "Stopped before purchase, payment, or reservation confirmation."
+            executionProgress = message
+            WorkflowManager.postToast(message)
+        case "ultraplan_done":
+            let success = json["success"] as? Bool ?? false
+            let message = success ? "Ultraplan complete" : "Ultraplan paused"
+            WorkflowManager.postToast(message, isError: !success)
         case "trajectory_complete":
             currentTrajectoryTask = nil
             isExecuting = false

@@ -53,6 +53,7 @@ struct SidebarAIChat: View {
     @Environment(AIConfigService.self) var configService
 
     @State private var messageText: String = ""
+    @State private var ultraplanEnabled: Bool = false
     @State private var showAddModelPopover: Bool = false
     @State private var newModelId: String = ""
     @FocusState private var isTextFieldFocused: Bool
@@ -188,6 +189,8 @@ struct SidebarAIChat: View {
                     webSearchToggle
                 }
 
+                ultraplanToggle
+
                 Spacer()
 
                 Button(action: sendMessage) {
@@ -196,7 +199,7 @@ struct SidebarAIChat: View {
                         .foregroundStyle(messageText.isEmpty ? contrastText.opacity(0.3) : contrastText.opacity(0.9))
                 }
                 .buttonStyle(.plain)
-                .disabled(messageText.isEmpty || aiService.isLoading || !aiService.hasApiKey)
+                .disabled(messageText.isEmpty || aiService.isLoading || (!aiService.hasApiKey && !ultraplanEnabled))
             }
         }
         .padding(.horizontal, 12)
@@ -306,6 +309,27 @@ struct SidebarAIChat: View {
         .frame(width: 36)
     }
 
+    private var ultraplanToggle: some View {
+        Button(action: {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                ultraplanEnabled.toggle()
+            }
+        }) {
+            Image(systemName: "point.3.connected.trianglepath.dotted")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(ultraplanEnabled ? .cyan : contrastText.opacity(0.5))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(ultraplanEnabled ? .cyan.opacity(0.15) : contrastText.opacity(0.08))
+                )
+        }
+        .buttonStyle(.plain)
+        .frame(height: 28)
+        .frame(width: 36)
+        .help("Ultraplan")
+    }
+
     // MARK: - Empty/Loading States
 
     private var apiKeyRequiredView: some View {
@@ -412,15 +436,16 @@ struct SidebarAIChat: View {
     private func sendMessage() {
         guard !messageText.isEmpty else { return }
         let text = messageText
+        let useUltraplan = ultraplanEnabled
         messageText = ""
 
         if WorkflowManager.shared.handleChatCommand(text, browserManager: browserManager, windowState: windowState) {
             return
         }
 
-        guard aiService.hasApiKey else { return }
+        guard aiService.hasApiKey || useUltraplan else { return }
         Task {
-            await aiService.sendMessage(text, windowState: windowState)
+            await aiService.sendMessage(text, windowState: windowState, ultraplanEnabled: useUltraplan)
         }
     }
 

@@ -100,12 +100,16 @@ class TrajectorySession:
             "url": msg.get("url", ""),
             "title": msg.get("title", ""),
             "text": msg.get("pageText", ""),
+            "accessibilityTree": tree,
             "candidates": candidates,
         }
         self._state_event.set()
         return True
 
     async def _wait_state(self, timeout: float = 20.0) -> dict[str, Any]:
+        if self._state_event.is_set():
+            self._state_event.clear()
+            return self._last_state
         self._state_event.clear()
         await asyncio.wait_for(self._state_event.wait(), timeout=timeout)
         return self._last_state
