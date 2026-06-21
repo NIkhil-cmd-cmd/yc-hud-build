@@ -1,0 +1,31 @@
+:root {
+  --terra-stone: #f4f0ea;
+  --terra-clay: #c4a484;
+  --terra-moss: #3d4f3a;
+  --terra-bark: #2a2420;
+  --terra-fog: #e8e4dc;
+  --terra-slate: #5c6b5a;
+  --terra-ember: #8b6914;
+  --terra-lichen: #7a8b72;
+
+  --font-display: "Instrument Serif", "Georgia", serif;
+  --font-body: "DM Sans", system-ui, sans-serif;
+
+  --space-xs: 0.5rem;
+  --space-sm: 1rem;
+  --space-md: 1.5rem;
+  --space-lg: 3rem;
+  --space-xl: 5rem;
+  --space-2xl: 8rem;
+
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 24px;
+
+  --ease-out: cubic-bezier(0.25, 0.1, 0.25, 1);
+  --shadow-soft: 0 12px 40px rgba(42, 36, 32, 0.08);
+  --shadow-lift: 0 24px 60px rgba(42, 36, 32, 0.14);
+
+  --max-width: 1200px;
+  --nav-height: 72px;
+}

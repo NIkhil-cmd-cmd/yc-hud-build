@@ -12,10 +12,13 @@ struct WorkflowGraphView: View {
     @State private var steps: [WorkflowStep] = []
     @State private var mdpGraph: WorkflowMDPGraph?
     @State private var loadError: String?
-    @State private var selectedTab: ViewTab = .mdp
+    @State private var selectedTab: ViewTab = .graph
+    @State private var selectedStateId: String?
+    @State private var selectedClusterId: Int?
 
     enum ViewTab: String, CaseIterable, Identifiable {
-        case mdp = "MDP Graph"
+        case graph = "MDP Graph"
+        case buckets = "Similar Buckets"
         case timeline = "Timeline"
 
         var id: String { rawValue }
@@ -42,35 +45,66 @@ struct WorkflowGraphView: View {
                 ProgressView("Loading workflow…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                Picker("View", selection: $selectedTab) {
-                    ForEach(ViewTab.allCases) { tab in
-                        Text(tab.rawValue).tag(tab)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .padding(.horizontal, 20)
-                .padding(.vertical, 12)
+                TabView(selection: $selectedTab) {
+                    graphTab
+                        .tabItem {
+                            Label("MDP Graph", systemImage: "point.3.connected.trianglepath.dotted")
+                        }
+                        .tag(ViewTab.graph)
 
-                switch selectedTab {
-                case .mdp:
-                    if let mdpGraph {
-                        WorkflowMDPInteractiveView(graph: mdpGraph)
-                    } else {
-                        Text("No MDP policy data for this workflow.")
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    }
-                case .timeline:
+                    bucketsTab
+                        .tabItem {
+                            Label("Similar Buckets", systemImage: "magnifyingglass")
+                        }
+                        .tag(ViewTab.buckets)
+
                     ScrollView {
                         timelineContent
                             .padding(20)
                     }
+                    .tabItem {
+                        Label("Timeline", systemImage: "list.bullet.rectangle")
+                    }
+                    .tag(ViewTab.timeline)
                 }
             }
         }
         .frame(minWidth: 900, minHeight: 620)
         .background(Color(nsColor: .windowBackgroundColor))
         .onAppear { loadGraph() }
+    }
+
+    private var graphTab: some View {
+        Group {
+            if let mdpGraph {
+                WorkflowMDPInteractiveView(
+                    graph: mdpGraph,
+                    selectedStateId: $selectedStateId,
+                    selectedClusterId: $selectedClusterId
+                )
+            } else {
+                Text("No MDP policy data for this workflow.")
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
+
+    private var bucketsTab: some View {
+        Group {
+            if let mdpGraph {
+                WorkflowMDPBucketSearchView(
+                    graph: mdpGraph,
+                    selectedStateId: $selectedStateId,
+                    selectedClusterId: $selectedClusterId,
+                    selectedTab: $selectedTab
+                )
+            } else {
+                Text("No MDP buckets to search yet.")
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
     }
 
     private var header: some View {
@@ -178,6 +212,8 @@ struct WorkflowGraphView: View {
             mdpGraph = graph
             workflowName = graph.workflowName
             loadError = nil
+            selectedStateId = graph.path.first ?? graph.states.first?.id
+            selectedClusterId = selectedStateId.flatMap { graph.stateMap[$0]?.cluster?.id }
         case .failure(let error):
             mdpGraph = nil
             loadError = error.localizedDescription
@@ -291,7 +327,231 @@ struct WorkflowGraphView: View {
         value?.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 
-    private func truncate(_ value: String, _ max: Int) -> String {
-        WorkflowMDPParser.truncate(value, max)
+    private func truncate(_ value: String, _ maxLength: Int) -> String {
+        WorkflowMDPParser.truncate(value, maxLength)
+    }
+}
+
+struct WorkflowMDPBucketSearchView: View {
+    let graph: WorkflowMDPGraph
+    @Binding var selectedStateId: String?
+    @Binding var selectedClusterId: Int?
+    @Binding var selectedTab: WorkflowGraphView.ViewTab
+
+    @State private var query = ""
+
+    private var buckets: [MDPClusterInfo] {
+        graph.buckets.sorted { lhs, rhs in
+            if lhs.members != rhs.members { return lhs.members > rhs.members }
+            return lhs.id < rhs.id
+        }
+    }
+
+    private var filteredBuckets: [(bucket: MDPClusterInfo, score: Double)] {
+        buckets
+            .map { bucket in (bucket, similarityScore(for: bucket, query: query)) }
+            .sorted { lhs, rhs in
+                if lhs.score != rhs.score { return lhs.score > rhs.score }
+                if lhs.bucket.members != rhs.bucket.members { return lhs.bucket.members > rhs.bucket.members }
+                return lhs.bucket.id < rhs.bucket.id
+            }
+    }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 12) {
+                TextField("Search buckets, URLs, actions, or element text", text: $query)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 13))
+
+                HStack(spacing: 10) {
+                    Text("\(filteredBuckets.count) buckets")
+                    if let selectedClusterId {
+                        Text("Selected bucket \(selectedClusterId)")
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+                ScrollView {
+                    LazyVStack(spacing: 8) {
+                        ForEach(filteredBuckets, id: \.bucket.id) { item in
+                            bucketCard(item.bucket, score: item.score)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+            }
+            .padding(16)
+            .frame(minWidth: 320, maxWidth: 420, maxHeight: .infinity, alignment: .topLeading)
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Search Guidance")
+                    .font(.headline)
+                Text("This view ranks MDP buckets by the current query and gives you a focused way to jump back into the graph tab.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let selectedCluster = currentSelectedBucket {
+                    bucketDetails(selectedCluster)
+                } else {
+                    Text("Pick a bucket to inspect its actions and launch the graph view.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                }
+
+                Spacer()
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+    }
+
+    private var currentSelectedBucket: MDPClusterInfo? {
+        if let selectedClusterId {
+            return graph.buckets.first(where: { $0.id == selectedClusterId })
+        }
+        return filteredBuckets.first?.bucket
+    }
+
+    private func bucketCard(_ bucket: MDPClusterInfo, score: Double) -> some View {
+        let isSelected = selectedClusterId == bucket.id
+        return Button {
+            select(bucket: bucket)
+        } label: {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Bucket \(bucket.id)")
+                        .font(.system(size: 13, weight: .semibold))
+                    Spacer()
+                    Text(scoreLabel(score))
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.accentColor.opacity(0.12), in: Capsule())
+                }
+                Text(bucket.urlPattern)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                HStack(spacing: 6) {
+                    Text("\(bucket.members) states")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    if let action = bucket.actions.first {
+                        Text(action.label)
+                            .font(.caption2)
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                    }
+                }
+                if !bucket.actions.isEmpty {
+                    bucketTagRow(bucket.actions.prefix(3).map(\.label))
+                }
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(isSelected ? Color.accentColor.opacity(0.12) : Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(isSelected ? Color.accentColor.opacity(0.45) : Color.primary.opacity(0.06), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func bucketDetails(_ bucket: MDPClusterInfo) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Bucket \(bucket.id)")
+                .font(.headline)
+            Text(bucket.urlPattern)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .lineLimit(3)
+
+            if !bucket.actions.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Actions")
+                        .font(.subheadline.weight(.semibold))
+                    ForEach(bucket.actions.prefix(6)) { action in
+                        HStack(alignment: .top, spacing: 8) {
+                            Text(action.label)
+                                .font(.caption)
+                            Spacer()
+                            Text(String(format: "%.2f", action.successRate))
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    }
+                }
+            }
+
+            Button("Open Graph") {
+                select(bucket: bucket)
+                selectedTab = .graph
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    private func select(bucket: MDPClusterInfo) {
+        selectedClusterId = bucket.id
+        if let state = graph.states.first(where: { $0.cluster?.id == bucket.id }) {
+            selectedStateId = state.id
+        }
+    }
+
+    private func similarityScore(for bucket: MDPClusterInfo, query: String) -> Double {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !q.isEmpty else { return Double(bucket.members) }
+
+        let terms = q.split(whereSeparator: \.isWhitespace).map(String.init)
+        let haystack = bucketSearchText(bucket)
+        let exact = haystack.contains(q) ? 4.0 : 0.0
+        let matches = terms.reduce(0.0) { total, term in
+            total + (haystack.contains(term) ? 1.0 : 0.0)
+        }
+        return exact + matches + Double(bucket.members) * 0.05
+    }
+
+    private func bucketSearchText(_ bucket: MDPClusterInfo) -> String {
+        let actionText = bucket.actions.map { [$0.label, $0.ref, $0.value].joined(separator: " ") }.joined(separator: " ")
+        let selectedStateText = graph.states
+            .filter { $0.cluster?.id == bucket.id }
+            .compactMap { state in
+                [state.sampleTitle, state.sampleStateText, state.sampleElementText]
+                    .compactMap { $0 }
+                    .joined(separator: " ")
+            }
+            .joined(separator: " ")
+        return [bucket.urlPattern, actionText, selectedStateText].joined(separator: " ").lowercased()
+    }
+
+    private func scoreLabel(_ score: Double) -> String {
+        String(format: "%.1f", score)
+    }
+
+    private func bucketTagRow(_ labels: [String]) -> some View {
+        HStack(spacing: 4) {
+            ForEach(labels.prefix(3), id: \.self) { label in
+                Text(label)
+                    .font(.caption2)
+                    .lineLimit(1)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.secondary.opacity(0.10), in: Capsule())
+            }
+        }
     }
 }

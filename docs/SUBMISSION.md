@@ -20,7 +20,7 @@ Main Competition + Most Creative
 HUD · Modal · Nook/WebKit · MiniMax · Fireworks · Exa · OpenAI Embeddings · NetworkX · Python · Swift
 
 ## Demo URL
-TBD — local macOS app + tokens dashboard (Cmd+Shift+T)
+TBD — marketing site: `website/tera/` (see [TERA_WEBSITE.md](TERA_WEBSITE.md)) · app: local macOS + tokens dashboard (Cmd+Shift+T)
 
 ## GitHub
 https://github.com/NIkhil-cmd-cmd/yc-hud-build

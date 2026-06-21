@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" fill="none">
+  <rect width="1200" height="630" fill="#2a2420"/>
+  <image href="https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&w=1200&q=80" width="1200" height="630" preserveAspectRatio="xMidYMid slice" opacity="0.45"/>
+  <rect width="1200" height="630" fill="url(#ogGrad)"/>
+  <defs>
+    <linearGradient id="ogGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#2a2420" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="#2a2420" stop-opacity="0.85"/>
+    </linearGradient>
+  </defs>
+  <text x="80" y="280" font-family="Georgia,serif" font-size="72" fill="#f4f0ea">Tera</text>
+  <text x="80" y="360" font-family="system-ui,sans-serif" font-size="28" fill="#c4a484">The agent thought once.</text>
+  <text x="80" y="400" font-family="system-ui,sans-serif" font-size="28" fill="#c4a484">Now it never has to again.</text>
+</svg>

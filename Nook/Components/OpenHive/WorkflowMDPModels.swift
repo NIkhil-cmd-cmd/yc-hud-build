@@ -6,6 +6,15 @@
 import Foundation
 import CoreGraphics
 
+struct MDPNodeArtifacts: Equatable {
+    let domHTML: String?
+    let screenshotPath: String?
+    let accessibilityPath: String?
+    let viewportScreenshotPath: String?
+    let fullPageScreenshotPath: String?
+    let elementScreenshotPath: String?
+}
+
 struct MDPActionCandidate: Identifiable, Equatable {
     let id: String
     let type: String
@@ -32,11 +41,16 @@ struct MDPStateNode: Identifiable, Equatable {
     let id: String
     let urlPattern: String
     let sampleURL: String?
+    let sampleTitle: String?
+    let sampleStateText: String?
+    let sampleElementText: String?
+    let sampleAction: MDPActionCandidate?
     let isStart: Bool
     let isTerminal: Bool
     let cluster: MDPClusterInfo?
     let primaryAction: MDPActionCandidate?
     let nextStateId: String?
+    let artifacts: MDPNodeArtifacts?
 }
 
 struct MDPClusterInfo: Equatable {
@@ -52,6 +66,8 @@ struct MDPEdge: Identifiable, Equatable {
     let to: String
     let label: String
     let actionType: String
+    let weight: Double
+    let support: Int
 }
 
 struct WorkflowMDPGraph: Equatable {
@@ -60,6 +76,7 @@ struct WorkflowMDPGraph: Equatable {
     let states: [MDPStateNode]
     let edges: [MDPEdge]
     let path: [String]
+    let buckets: [MDPClusterInfo]
 
     var stateMap: [String: MDPStateNode] {
         Dictionary(uniqueKeysWithValues: states.map { ($0.id, $0) })
@@ -106,10 +123,24 @@ enum WorkflowMDPParser {
 
         for (id, entry) in policy {
             let meta = rawNodes[id]
+            let sampleStep = (meta?["sample_step"] as? [String: Any])
+                ?? (meta?["sampleStep"] as? [String: Any])
             let urlPattern = (meta?["url_pattern"] as? String)
                 ?? Int(id).flatMap { clusters[$0]?.urlPattern }
                 ?? "state \(id)"
             let sampleURL = meta?["url"] as? String
+                ?? sampleStep?["url"] as? String
+            let sampleTitle = meta?["sampleTitle"] as? String
+                ?? meta?["title"] as? String
+                ?? sampleStep?["title"] as? String
+            let sampleStateText = meta?["sampleStateText"] as? String
+                ?? meta?["stateText"] as? String
+                ?? sampleStep?["stateText"] as? String
+            let sampleElementText = meta?["sampleElementText"] as? String
+                ?? (meta?["sampleSelectedElement"] as? [String: Any]).flatMap { $0["text"] as? String }
+                ?? (sampleStep?["selectedElement"] as? [String: Any]).flatMap { $0["text"] as? String }
+                ?? (sampleStep?["action"] as? [String: Any]).flatMap { $0["text"] as? String }
+                ?? (sampleStep?["action"] as? [String: Any]).flatMap { $0["name"] as? String }
             let nextRaw = entry["next"]
             let nextId: String? = {
                 if let n = nextRaw as? Int { return String(n) }
@@ -120,17 +151,23 @@ enum WorkflowMDPParser {
             let cluster = Int(id).flatMap { clusters[$0] }
             let actionDict = entry["action"] as? [String: Any] ?? [:]
             let primary = actionCandidate(from: actionDict, id: "\(id)-primary")
+            let artifacts = nodeArtifacts(from: meta, sampleStep: sampleStep)
 
             states.append(
                 MDPStateNode(
                     id: id,
                     urlPattern: urlPattern,
                     sampleURL: sampleURL,
+                    sampleTitle: sampleTitle,
+                    sampleStateText: sampleStateText,
+                    sampleElementText: sampleElementText,
+                    sampleAction: primary,
                     isStart: id == startId,
                     isTerminal: !hasNext,
                     cluster: cluster,
                     primaryAction: primary,
-                    nextStateId: hasNext ? nextId : nil
+                    nextStateId: hasNext ? nextId : nil,
+                    artifacts: artifacts
                 )
             )
 
@@ -141,7 +178,9 @@ enum WorkflowMDPParser {
                         from: id,
                         to: nextId,
                         label: primary.label,
-                        actionType: primary.type
+                        actionType: primary.type,
+                        weight: primary.successRate,
+                        support: primary.support
                     )
                 )
             }
@@ -160,7 +199,11 @@ enum WorkflowMDPParser {
                 workflowName: name,
                 states: states,
                 edges: edges,
-                path: path
+                path: path,
+                buckets: clusters.values.sorted { lhs, rhs in
+                    if lhs.members != rhs.members { return lhs.members > rhs.members }
+                    return lhs.id < rhs.id
+                }
             )
         )
     }
@@ -270,6 +313,58 @@ enum WorkflowMDPParser {
             out[id] = MDPClusterInfo(id: id, urlPattern: pattern, members: members, actions: actions)
         }
         return out
+    }
+
+    private static func nodeArtifacts(from meta: [String: Any]?, sampleStep: [String: Any]?) -> MDPNodeArtifacts? {
+        guard let meta else { return nil }
+        let artifactDict = meta["artifacts"] as? [String: Any]
+        let sampleArtifacts = sampleStep?["artifacts"] as? [String: Any]
+        let domHTML = meta["domHTML"] as? String
+            ?? meta["domHtml"] as? String
+            ?? sampleStep?["domHTML"] as? String
+            ?? sampleStep?["domHtml"] as? String
+            ?? sampleArtifacts?["dom"] as? String
+        let screenshotPath = meta["snapshotPath"] as? String
+            ?? meta["screenshotPath"] as? String
+            ?? sampleStep?["snapshotPath"] as? String
+            ?? sampleStep?["screenshotPath"] as? String
+            ?? artifactDict?["screenshotPath"] as? String
+            ?? sampleArtifacts?["screenshotPath"] as? String
+            ?? sampleArtifacts?["viewportScreenshot"] as? String
+            ?? sampleArtifacts?["fullPageScreenshot"] as? String
+            ?? sampleArtifacts?["elementScreenshot"] as? String
+        let accessibilityPath = meta["accessibilityPath"] as? String
+            ?? artifactDict?["accessibility"] as? String
+            ?? sampleStep?["accessibilityPath"] as? String
+            ?? sampleArtifacts?["accessibility"] as? String
+        let viewportScreenshotPath = meta["viewportScreenshotPath"] as? String
+            ?? artifactDict?["viewportScreenshot"] as? String
+            ?? sampleStep?["viewportScreenshotPath"] as? String
+            ?? sampleArtifacts?["viewportScreenshot"] as? String
+        let fullPageScreenshotPath = meta["fullPageScreenshotPath"] as? String
+            ?? artifactDict?["fullPageScreenshot"] as? String
+            ?? sampleStep?["fullPageScreenshotPath"] as? String
+            ?? sampleArtifacts?["fullPageScreenshot"] as? String
+        let elementScreenshotPath = meta["elementScreenshotPath"] as? String
+            ?? artifactDict?["elementScreenshot"] as? String
+            ?? sampleStep?["elementScreenshotPath"] as? String
+            ?? sampleArtifacts?["elementScreenshot"] as? String
+        if domHTML == nil,
+           screenshotPath == nil,
+           accessibilityPath == nil,
+           viewportScreenshotPath == nil,
+           fullPageScreenshotPath == nil,
+           elementScreenshotPath == nil {
+            return nil
+        }
+        return MDPNodeArtifacts(
+            domHTML: domHTML,
+            screenshotPath: screenshotPath,
+            accessibilityPath: accessibilityPath,
+            viewportScreenshotPath: viewportScreenshotPath,
+            fullPageScreenshotPath: fullPageScreenshotPath,
+            elementScreenshotPath: elementScreenshotPath
+        )
     }
 
     private static func actionCandidate(from action: [String: Any], id: String) -> MDPActionCandidate? {

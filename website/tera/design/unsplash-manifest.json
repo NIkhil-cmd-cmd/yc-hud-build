@@ -1,0 +1,91 @@
+{
+  "version": 1,
+  "treatment": "Desaturate 20%, grain overlay 3%, gradient scrim for legibility",
+  "images": [
+    {
+      "id": "hero-ridgeline",
+      "role": "hero-backdrop",
+      "url": "https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&w=2400&q=80",
+      "photographer": "Denny Müller",
+      "unsplashUrl": "https://unsplash.com/photos/green-mountain-across-body-of-water-during-daytime-jVj0ll0S8J4"
+    },
+    {
+      "id": "aerial-valley",
+      "role": "section-break",
+      "url": "https://images.unsplash.com/photo-1469474968028-56623f02e42e?auto=format&fit=crop&w=2400&q=80",
+      "photographer": "Stefan Stefancik",
+      "unsplashUrl": "https://unsplash.com/photos/green-grass-field-near-mountain-during-golden-hour-5pBxNyfzTOM"
+    },
+    {
+      "id": "fog-valley",
+      "role": "mockup-context",
+      "url": "https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?auto=format&fit=crop&w=2400&q=80",
+      "photographer": "Luca Bravo",
+      "unsplashUrl": "https://unsplash.com/photos/foggy-mountain-summit-8VgVUn8ISgM"
+    },
+    {
+      "id": "alpine-layers",
+      "role": "hero-alt",
+      "url": "https://images.unsplash.com/photo-1506905925346-21bda4d32df4?auto=format&fit=crop&w=2400&q=80",
+      "photographer": "Simon Berger",
+      "unsplashUrl": "https://unsplash.com/photos/snow-covered-mountain-during-daytime-awL-YUt21Bw"
+    },
+    {
+      "id": "sand-abstract",
+      "role": "texture",
+      "url": "https://images.unsplash.com/photo-1509316784379-b1e466119993?auto=format&fit=crop&w=1200&q=80",
+      "photographer": "David Clode",
+      "unsplashUrl": "https://unsplash.com/photos/aerial-photography-of-desert-UNd3lRKhwK4"
+    },
+    {
+      "id": "rock-strata",
+      "role": "marquee-divider",
+      "url": "https://images.unsplash.com/photo-1519681393784-d120267933ba?auto=format&fit=crop&w=1200&q=80",
+      "photographer": "Luca Bravo",
+      "unsplashUrl": "https://unsplash.com/photos/landscape-photography-of-mountain-hit-by-sun-rays-1761279"
+    },
+    {
+      "id": "stone-macro",
+      "role": "section-break",
+      "url": "https://images.unsplash.com/photo-1454496522488-7a8e488e4396?auto=format&fit=crop&w=1200&q=80",
+      "photographer": "Simon Berger",
+      "unsplashUrl": "https://unsplash.com/photos/gray-and-white-mountain-rocks-awL-YUt21Bw"
+    },
+    {
+      "id": "forest-canopy",
+      "role": "testimonial-bg",
+      "url": "https://images.unsplash.com/photo-1441974231531-c6227db76b6e?auto=format&fit=crop&w=1200&q=80",
+      "photographer": "Casey Horner",
+      "unsplashUrl": "https://unsplash.com/photos/green-leafed-trees-4F2IsMOCgpw"
+    },
+    {
+      "id": "mist-ridge",
+      "role": "highlight-card",
+      "url": "https://images.unsplash.com/photo-1418989871901-85e521e51fde?auto=format&fit=crop&w=1200&q=80",
+      "photographer": "Luca Bravo",
+      "unsplashUrl": "https://unsplash.com/photos/landscape-photography-of-mountains-1761279"
+    },
+    {
+      "id": "volcanic-dark",
+      "role": "texture-dark",
+      "url": "https://images.unsplash.com/photo-1473496162513-60ffa8808424?auto=format&fit=crop&w=1200&q=80",
+      "photographer": "David Clode",
+      "unsplashUrl": "https://unsplash.com/photos/brown-rock-formation-during-daytime-UNd3lRKhwK4"
+    },
+    {
+      "id": "coastal-fog",
+      "role": "about-accent",
+      "url": "https://images.unsplash.com/photo-1501785888041-af3ef285b470?auto=format&fit=crop&w=1200&q=80",
+      "photographer": "Luca Bravo",
+      "unsplashUrl": "https://unsplash.com/photos/landscape-photography-of-lake-and-mountain-1472214103451-9374bd794c4d"
+    },
+    {
+      "id": "geology-aerial",
+      "role": "pricing-bg",
+      "url": "https://images.unsplash.com/photo-1518173949453-db7300382818?auto=format&fit=crop&w=1200&q=80",
+      "photographer": "David Clode",
+      "unsplashUrl": "https://unsplash.com/photos/aerial-view-of-mountain-range-covered-with-snow-under-white-clouds-UNd3lRKhwK4"
+    }
+  ],
+  "credits": "Photography via Unsplash — Denny Müller, Stefan Stefancik, Luca Bravo, Simon Berger, David Clode, Casey Horner"
+}
