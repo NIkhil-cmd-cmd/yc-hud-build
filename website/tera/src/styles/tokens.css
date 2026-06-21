@@ -39,5 +39,6 @@
   --shadow-lift: 0 24px 64px rgba(0, 0, 0, 0.5);
 
   --max-width: 1200px;
+  --page-gutter: clamp(1.5rem, 5vw, 3rem);
   --nav-height: 72px;
 }

@@ -1,5 +1,5 @@
 import { ShaderBackground, TESTIMONIALS_GRADIENT } from "./components/ShaderBackground.jsx";
-import { LiquidLogo } from "./components/LiquidLogo.jsx";
+import { TeraWordmark } from "./components/TeraWordmark.jsx";
 import { LiquidGlass } from "./components/LiquidGlass.jsx";
 import { GrainCardArt } from "./components/GrainCardArt.jsx";
 import {
@@ -133,7 +133,7 @@ export default function App() {
         <LiquidGlass className="nav-glass" as="div" intensity={0.85} blur={26}>
           <div className="nav-inner">
             <a href="#" className="nav-logo-link" aria-label="Tera home">
-              <LiquidLogo width={96} height={36} />
+              <TeraWordmark width={96} height={36} />
             </a>
             <div className="nav-right">
               <span className="nav-badge">macOS 15.5+</span>
@@ -166,9 +166,8 @@ export default function App() {
         <section className="hero" aria-labelledby="hero-heading">
           <ShaderBackground className="hero-shader" pixelDensity={1.8} />
           <div className="container hero-content">
-            <p className="hero-eyebrow reveal hero-stagger">Native macOS browser · Local-first</p>
-            <div className="hero-logo-wrap reveal hero-stagger reveal-delay-1">
-              <LiquidLogo width={180} height={64} />
+            <div className="hero-logo-wrap reveal hero-stagger">
+              <TeraWordmark width={180} height={64} />
             </div>
             <h1 id="hero-heading" className="display reveal hero-stagger reveal-delay-1">
               The agent thought once.
@@ -178,10 +177,6 @@ export default function App() {
             <p className="hero-sub reveal hero-stagger reveal-delay-2">
               Tera learns from how you browse, compiles your workflows on-device, and replays them without calling an LLM again.
             </p>
-            <div className="scroll-cue reveal hero-stagger reveal-delay-3" aria-hidden="true">
-              <span className="scroll-cue-line" />
-              Scroll to explore
-            </div>
           </div>
         </section>
 
@@ -453,7 +448,7 @@ export default function App() {
       <footer className="footer" role="contentinfo">
         <div className="container">
           <div className="footer-hero">
-            <LiquidLogo width={140} height={52} className="footer-logo" />
+            <TeraWordmark width={140} height={52} className="footer-logo" />
             <h2>
               The agent thought once.
               <br />

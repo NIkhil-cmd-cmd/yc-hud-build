@@ -13,5 +13,14 @@ export default defineConfig({
     outDir: path.resolve(__dirname, "../../Nook/Resources/ShaderGradient"),
     emptyOutDir: true,
     sourcemap: false,
+    assetsDir: ".",
+    rollupOptions: {
+      input: path.resolve(__dirname, "embed/shader-gradient.html"),
+      output: {
+        entryFileNames: "shader-gradient.js",
+        chunkFileNames: "shader-gradient-[name].js",
+        assetFileNames: "shader-gradient-[name][extname]",
+      },
+    },
   },
 });
