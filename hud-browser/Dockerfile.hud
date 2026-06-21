@@ -1,0 +1,64 @@
+# syntax=docker/dockerfile:1
+FROM hudevals/hud-browser-base:latest AS setup
+
+WORKDIR /app
+
+# Install sudo (for the uid-wall: drop the desktop to `ubuntu`) and BrowserOS — the CDP browser the
+# rfb desktop shows and the cdp capability drives.
+RUN wget -q -O /tmp/BrowserOS.deb https://cdn.browseros.com/download/BrowserOS.deb && \
+    apt-get update && \
+    apt-get install -y sudo /tmp/BrowserOS.deb && \
+    rm /tmp/BrowserOS.deb && \
+    rm -rf /var/lib/apt/lists/*
+
+ENV BROWSEROS_BIN=/usr/bin/browseros
+
+# Install the env + app dependencies (env.py launches the desktop and both app backends).
+COPY pyproject.toml /app/
+RUN uv pip install --system --break-system-packages .
+
+# Copy source: env.py/tasks.py (flat), the backend substrate, and the tests.
+COPY env.py tasks.py /app/
+COPY backend/ /app/backend/
+COPY tests/ /app/tests/
+
+# Build the Next.js frontends for the 2048 + todo apps.
+RUN set -e; \
+    for pkg in $(find /app/backend -type f -path '*/frontend/package.json'); do \
+        app_dir=$(dirname "$pkg"); \
+        echo "Installing dependencies in $app_dir"; \
+        if [ -f "$app_dir/package-lock.json" ]; then \
+            (cd "$app_dir" && npm ci --no-audit --no-fund); \
+        else \
+            (cd "$app_dir" && npm install --no-audit --no-fund); \
+        fi; \
+    done && \
+    for pkg in $(find /app/backend -type f -path '*/frontend/package.json'); do \
+        app_dir=$(dirname "$pkg"); \
+        if [ -f "$app_dir/next.config.js" ]; then \
+            echo "Building Next.js app in $app_dir"; \
+            (cd "$app_dir" && npm run build); \
+        fi; \
+    done
+
+# uid-wall: @env.initialize runs the substrate (Xvfb/x11vnc/BrowserOS + the apps) as `ubuntu`
+# (uid 1000), so an agent who points the browser at file:// cannot read the grading code; the root
+# control channel can. Give ubuntu what it must write (app SQLite, Next.js cache, BrowserOS profile)
+# and lock env.py/tasks.py to root.
+RUN chown -R ubuntu:ubuntu /app/backend /home/ubuntu
+RUN chmod 700 /app/env.py /app/tasks.py
+
+# Environment configuration
+ENV HUD_LOG_STREAM="stderr"
+ENV PYTHONUNBUFFERED="1"
+ENV DISPLAY=":1"
+ENV PYTHONPATH=/app
+
+# The v6 control channel — the rfb/cdp capabilities tunnel through this single port.
+EXPOSE 8765
+# noVNC viewer for debugging: http://localhost:8080/vnc.html
+EXPOSE 8080
+
+# @env.initialize launches the substrate + publishes the rfb + cdp capabilities. One launch path
+# for local `hud eval` and the image — no init system, no backgrounded server in the CMD.
+CMD ["hud", "serve", "env:env", "--host", "0.0.0.0", "--port", "8765"]
